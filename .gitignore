@@ -1,0 +1,19 @@
+# Virtual Environment
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Model Weights
+*.pt
+
+# Output & data runtime
+output/
+*.csv
+videos/
+*.mp4
+
+# Credentials
+.env
+*.env
+.env.*
