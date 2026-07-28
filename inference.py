@@ -434,7 +434,7 @@ def run_inference(frame_folder: str):
                         "frame"                 : frame_count,
                         "frame_file"            : frame_filename,
                         "track_id"              : tid,
-                        "person_id": person_id,
+                        "person_id": tid_to_person.get(tid, "-"),
                         "in_zone"               : False,
                         "raw_activity"          : "-",
                         "smoothed_activity"     : "-",
@@ -531,7 +531,7 @@ def run_inference(frame_folder: str):
             person_ids_this_frame = {tid_to_person[t] for t in in_zone_tids_this_frame if t in tid_to_person}
             for pid in person_ids_this_frame:
                 if pid not in video_trackers and frame_size is not None:
-                    video_trackers[tid] = ViolationVideoTracker(tid, frame_size, VIOLATION_VIDEO_DIR)
+                    video_trackers[pid] = ViolationVideoTracker(pid, frame_size, VIOLATION_VIDEO_DIR)
             # for tid in active_tracks:
             #     if tid not in video_trackers and frame_size is not None:
             #         video_trackers[tid] = ViolationVideoTracker(tid, frame_size, VIOLATION_VIDEO_DIR)
@@ -539,6 +539,9 @@ def run_inference(frame_folder: str):
             # for tid in current_tids:
             #     if tid not in video_trackers and frame_size is not None:
             #         video_trackers[tid] = ViolationVideoTracker(tid, frame_size, VIOLATION_VIDEO_DIR)
+            confirmed_pids_this_frame = {
+                tid_to_person[t] for t in confirmed_pids_this_frame if t in tid_to_person
+            }
 
             for pid, vt in video_trackers.items():
                 is_viol = pid in confirmed_tids_this_frame
