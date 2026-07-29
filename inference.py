@@ -1,10 +1,12 @@
 import os
+import re
 import csv
 import glob
 import cv2
 import torch
 import open_clip
 import subprocess
+import pytesseract
 import numpy as np
 from PIL import Image
 from datetime import datetime
@@ -42,6 +44,29 @@ REID_MIN_COSINE_SCORE = 0.9
 REID_MAX_DISTANCE_PX = 150
 
 VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'mp4v')
+
+TIMESTAMP_CROP = [
+    (6, 47),
+    (307, 47),
+    (306, 112),
+    (4, 115)
+]
+
+def extract_cctv_timestamp(frame):
+    xs = [p[0] for p in TIMESTAMP_CROP]
+    ys = [p[1] for p in TIMESTAMP_CROP]
+    x1, x2 = min(xs), max(xs)
+    y1, y2 = min(ys), max(ys)
+    roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+
+    _, roi_thresh = cv2.threshold(roi_gray, 180, 255, cv2.THRESH_BINARY)
+
+    text = pytesseract.image_to_string(roi_thresh, config="--psm 7")
+
+    match = re.search(r"(\d{2}-\d{2}-\d{4}).*?(\d{2}:\d{2}:\d{2})", text)
+    if match:
+        return f"{match.group(1)} {match.group(2)}"
+    return None
 
 ZONE_POLYGON = [
     (1, 193),
@@ -176,7 +201,7 @@ class ViolationVideoTracker:
         self.current_clipname = os.path.join(self.output_dir, filename)
         w, h = self.frame_size
         self.writer = cv2.VideoWriter(
-            self.current_clipname, VIDEO_FOURCC, FRAME_INTERVAL, (w, h)
+            self.current_clipname, VIDEO_FOURCC, FRAME_PER_SECOND, (w, h)
         )
         print(f"[VideoTracker] Track {self.track_id}: mulai rekam -> {filename}")
 
@@ -356,6 +381,7 @@ def run_inference(frame_folder: str):
 
             frame_count += 1
             frame_filename = os.path.basename(frame_path)
+            cctv_ts = extract_cctv_timestamp(frame)
 
             for tid in list(track_last_seen.keys()):
                 if frame_count - track_last_seen[tid] > GRACE_PERIOD_FRAMES:
