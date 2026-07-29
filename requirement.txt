@@ -2,3 +2,5 @@ open_clip_torch
 ultralytics
 anthropic
 xhtml2pdf
+pytesseract
+numpy
