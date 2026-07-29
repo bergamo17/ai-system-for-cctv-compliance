@@ -42,10 +42,10 @@ REID_MAX_DISTANCE_PX = 150
 VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'mp4v')
 
 ZONE_POLYGON = [
-    (29, 2),
-    (398, 136),
-    (244, 541),
-    (2, 182)
+    (23, 197),
+    (195, 6),
+    (777, 326),
+    (556, 1044)
 ]
 
 ACTIVITIES = [
