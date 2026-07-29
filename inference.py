@@ -24,6 +24,8 @@ VIOLATION_FRAMES_DIR = "output/frames/violation"
 VIOLATION_VIDEO_DIR = "output/videos/violation"
 COMPLIANT_FRAMES_DIR = "output/frames/compliant"
 
+ANNOTATED_VIDEO_DIR = "output/videos/annotated"
+
 
 PRE_VIOLATIONS_FRAME = max(1, int(PRE_VIOLATION_DURATION * FRAME_PER_SECOND))
 POST_VIOLATION_FRAME = max(1, int(POST_VIOLATION_DURATION * FRAME_PER_SECOND))
@@ -42,10 +44,10 @@ REID_MAX_DISTANCE_PX = 150
 VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'mp4v')
 
 ZONE_POLYGON = [
-    (23, 197),
-    (195, 6),
-    (777, 326),
-    (556, 1044)
+    (1, 193),
+    (159, 2),
+    (786, 285),
+    (507, 1071)
 ]
 
 ACTIVITIES = [
@@ -241,7 +243,7 @@ class ViolationVideoTracker:
 
 
 print("Load YOLO model...")
-yolo_model = YOLO("yolov8s-worldv2.pt")
+yolo_model = YOLO("yolov8l-worldv2.pt")
 yolo_model.set_classes(['person'])
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -269,9 +271,13 @@ def run_inference(frame_folder: str):
     print(f"[DEBUG] PRE_VIOLATIONS_FRAME={PRE_VIOLATIONS_FRAME}, POSt_VIOLATION_FRAME={POST_VIOLATION_FRAME}")
     os.makedirs(OUTPUT_PATH, exist_ok=True)
     os.makedirs(VIOLATION_VIDEO_DIR, exist_ok=True)
+    os.makedirs(ANNOTATED_VIDEO_DIR, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     violation_log_path = os.path.join(OUTPUT_PATH, f"violation_log_{timestamp}.csv")
+
+    annotated_video_path = os.path.join(ANNOTATED_VIDEO_DIR, f"annotated_{timestamp}.mp4")
+    full_video_writer = None
 
     # ── Baca frame dari folder ──
     frame_files = sorted(glob.glob(os.path.join(frame_folder, "*.jpg")))
@@ -377,11 +383,19 @@ def run_inference(frame_folder: str):
                 h, w = frame.shape[:2]
                 frame_size = (w, h)
 
+                full_video_writer = cv2.VideoWriter(
+                    annotated_video_path, VIDEO_FOURCC, FRAME_PER_SECOND, frame_size
+                )
+                print(f"[Inference] Full annotated video -> {annotated_video_path}")
+
             # ── Jalankan YOLO ──
             yolo_results  = yolo_model.track(frame, conf=0.35, persist=True, tracker="bytetrack.yaml", verbose=False)
             boxes = yolo_results[0].boxes
 
             if boxes.id is None:
+                if full_video_writer is not None:
+                    full_video_writer.write(frame)
+
                 if frame_count % 30 == 0:
                     pct = (frame_count / total_frames) * 100
                     print(f"[Inference] Progress: {frame_count}/{total_frames} frame ({pct:.1f}%)")
@@ -540,12 +554,15 @@ def run_inference(frame_folder: str):
             #     if tid not in video_trackers and frame_size is not None:
             #         video_trackers[tid] = ViolationVideoTracker(tid, frame_size, VIOLATION_VIDEO_DIR)
             confirmed_pids_this_frame = {
-                tid_to_person[t] for t in confirmed_pids_this_frame if t in tid_to_person
+                tid_to_person[t] for t in confirmed_tids_this_frame if t in tid_to_person
             }
 
             for pid, vt in video_trackers.items():
                 is_viol = pid in confirmed_tids_this_frame
                 vt.push(frame, is_viol)
+
+            if full_video_writer is not None:
+                full_video_writer.write(frame)
 
             if frame_count % 30 == 0:
                 pct = (frame_count / total_frames) * 100
@@ -553,6 +570,23 @@ def run_inference(frame_folder: str):
 
     for tid, vt in video_trackers.items():
         vt.finalize()
+
+    if full_video_writer is not None:
+        full_video_writer.release()
+        print(f"[Inference] Full annotated video selesai (raw) -> {annotated_video_path}")
+
+        tmp_path = annotated_video_path.replace(".mp4", "_tmp.mp4")
+        os.rename(annotated_video_path, tmp_path)
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-i", tmp_path,
+            "-vcodec", "libx264",
+            "-crf", "23",
+            "-preset", "fast",
+            annotated_video_path
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.remove(tmp_path)
+        print(f"[Inference] Konversi H.264 selesai -> {annotated_video_path}")
     
     # ── SELESAI ──
     in_zone_logs = [r for r in results_log if r["in_zone"]]
