@@ -13,7 +13,8 @@ from datetime import datetime
 from collections import deque, Counter
 from ultralytics import YOLO
 from shapely.geometry import Point, Polygon
-from config import FRAME_INTERVAL, FRAME_PER_SECOND, PRE_VIOLATION_DURATION, POST_VIOLATION_DURATION
+from config import (FRAME_INTERVAL, FRAME_PER_SECOND, PRE_VIOLATION_DURATION, 
+    POST_VIOLATION_DURATION, ACTIVITIES, ACTIVE_ACTIVITIES, VIOLATIONS, IDLE_ACTIVITIES)
 
 
 # ─────────────────────────────────────────────
@@ -80,30 +81,10 @@ def extract_cctv_timestamp(frame):
     return None
 
 ZONE_POLYGON = [
-    (1, 193),
-    (159, 2),
-    (786, 285),
-    (507, 1071)
-]
-
-ACTIVITIES = [
-    'a person preparing or serving a drink',
-    'a person standing behind a counter',
-    'a person talking to a customer at a counter',
-    'a person cleaning or organizing the counter',
-    'a person walking behind the counter',
-    'a person sitting idle doing nothing',
-    'a person using a phone',
-    'a person eating food',
-    'a person lying down sleeping',
-]
-
-# VIOLATIONS harus selalu subset dari ACTIVITIES
-VIOLATIONS = [
-    'a person using a phone',
-    'a person eating food',
-    'a person lying down sleeping',
-    'a person sitting idle doing nothing',
+    (505, 1078),
+    (87, 267),
+    (314, 8),
+    (913, 421)
 ]
 
 

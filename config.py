@@ -21,3 +21,45 @@ SUMMARY_OUTPUT_DIR = "output/summary"
 
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
+
+ACTIVITIES = [
+    'a person preparing or serving a drink',
+    'a person standing behind a counter',
+    'a person talking to a customer at a counter',
+    'a person cleaning or organizing the counter',
+    'a person walking behind the counter',
+    'a person sitting idle doing nothing',
+    'a person using a phone',
+    'a person eating food',
+    'a person lying down sleeping',
+]
+
+# VIOLATIONS harus selalu subset dari ACTIVITIES
+VIOLATIONS = [
+    'a person using a phone',
+    'a person eating food',
+    'a person lying down sleeping',
+    'a person sitting idle doing nothing',
+]
+
+# ACTIVE_ACTIVITIES + IDLE_ACTIVITIES harus selalu partisi lengkap dari ACTIVITIES
+ACTIVE_ACTIVITIES = [
+    'a person preparing or serving a drink',
+    'a person talking to a customer at a counter',
+    'a person cleaning or organizing the counter',
+    'a person walking behind the counter',
+]
+
+IDLE_ACTIVITIES = [
+    'a person standing behind a counter',
+    'a person sitting idle doing nothing',
+    'a person using a phone',
+    'a person eating food',
+    'a person lying down sleeping',
+]
+
+assert set(VIOLATIONS).issubset(set(ACTIVITIES)), "VIOLATIONS harus subset dari ACTIVITIES"
+assert set(ACTIVE_ACTIVITIES) | set(IDLE_ACTIVITIES) == set(ACTIVITIES), \
+    "ACTIVE_ACTIVITIES + IDLE_ACTIVITIES harus mencakup semua ACTIVITIES tanpa sisa"
+assert set(ACTIVE_ACTIVITIES) & set(IDLE_ACTIVITIES) == set(), \
+    "ACTIVE_ACTIVITIES dan IDLE_ACTIVITIES tidak boleh overlap"

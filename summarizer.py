@@ -10,6 +10,8 @@ from config import (
     ANTHROPIC_MODEL,
     ANTHROPIC_API_KEY,
     SUMMARY_OUTPUT_DIR,
+    ACTIVE_ACTIVITIES,
+    IDLE_ACTIVITIES,
 )
 
 #client = OpenAI(
@@ -34,6 +36,54 @@ def load_log(log_path: str):
             rows.append(r)
 
     return rows    
+
+def compute_zone_stats(rows) -> dict:
+    total_rows = len(rows)
+    if total_rows == 0:
+        return {
+            "total_data_terpantau": 0,
+            "persentase_dalam_zona": "0.0%",
+            "persentase_luar_zona": "0.0%",
+        }
+
+    in_zone_rows = sum(1 for r in rows if r["in_zone"] == "True")
+    out_zone_rows = total_rows - in_zone_rows
+
+    return {
+        "total_data_terpantau": total_rows,
+        "persentase_dalam_zona": f"{round((in_zone_rows / total_rows) * 100, 1)}%",
+        "persentase_luar_zona": f"{round((out_zone_rows / total_rows) * 100, 1)}%",
+    }
+
+def compute_activity_time_stats(rows) -> dict:
+    in_zone_rows = [r for r in rows if r["in_zone"] == "True"]
+    total = len(in_zone_rows)
+
+    if total == 0:
+        return {
+            "total_frame_in_zone": 0,
+            "persentase_active_working_time": "0.0%",
+            "persentase_idle_time": "0.0%",
+        }
+
+    active_frames = sum(1 for r in in_zone_rows if r["smoothed_activity"] in ACTIVE_ACTIVITIES)
+    idle_frames = sum(1 for r in in_zone_rows if r["smoothed_activity"] in IDLE_ACTIVITIES)
+
+    return {
+        "total_frame_in_zone": total,
+        "active_frames": active_frames,
+        "idle_frames": idle_frames,
+        "persentase_active_working_time": f"{round((active_frames / total) * 100, 1)}%",
+        "persentase_idle_time": f"{round((idle_frames / total) * 100, 1)}%"
+    }
+
+def compute_operations_score(violation_stats: dict, activity_stats: dict) -> int:
+    compliance_pct = 100 - float(violation_stats["persentase_waktu_pelanggaran"].rstrip("%"))
+    active_pct = float(activity_stats["persentase_active_working_time"].rstrip("%"))
+
+    components = [compliance_pct, active_pct]
+    score = round(sum(components) / len(components))
+    return max(0, min(100, score))
 
 
 def compute_violation_stats(rows) -> dict:
@@ -115,89 +165,72 @@ def estimate_token_usage(system_prompt: str, user_prompt: str, model: str) -> in
     )
     return count.input_tokens
 
-def call_llm_summary(compressed_text: str, stats: dict, video_name: str = "") -> str:
+def call_llm_summary(
+    compressed_text: str, 
+    violation_stats: dict, 
+    zone_stats: dict,
+    activity_stats: dict,
+    ops_score: int,
+    video_name: str = ""
+) -> str:
     system_prompt = (
-        "Anda adalah asisten yang membuat laporan ringkasan PELANGGARAN karyawan untuk "
-        "pemilik usaha, berdasarkan hasil pemantauan kamera CCTV. Anda akan menerima "
-        "data mentah berisi catatan aktivitas yang terpantau di area kerja, termasuk "
-        "jenis pelanggaran (seperti bermain HP, makan, tidur, atau bermalas-malasan "
-        "saat jam kerja), jam kejadian pelanggaran tersebut (kolom violation_timestamp), "
-        "dan angka ringkasan yang SUDAH DIHITUNG sebelumnya berupa persentase waktu "
-        "pelanggaran dari total waktu pemantauan (field persentase_waktu_pelanggaran).\n\n"
-        "PENTING SOAL PERSENTASE: gunakan angka persentase_waktu_pelanggaran yang sudah "
-        "diberikan APA ADANYA dalam laporan Anda. JANGAN menghitung ulang, membulatkan "
-        "ulang, atau mengarang persentase sendiri dari membaca baris-baris data mentah "
-        "satu per satu — angka itu sudah dihitung secara akurat sebelum sampai ke Anda "
-        "dan tidak boleh diubah. Sebutkan persentase ini di bagian Ringkasan Singkat "
-        "dengan kalimat yang mudah dipahami, misalnya: 'Selama masa pemantauan, sekitar "
-        "18% waktu tercatat sebagai indikasi pelanggaran.' Jika field persentase_waktu_pelanggaran "
-        "tidak tersedia di data, JANGAN mengarang angka — cukup lewati penyebutan persentase.\n\n"
-        "PENTING: Laporan ini HANYA berfokus pada pelanggaran. Jangan membuat ringkasan "
-        "aktivitas umum karyawan yang bekerja normal/sesuai tugas — bagian itu boleh "
-        "disebut sekilas sebagai konteks singkat, tapi bukan fokus utama laporan. "
-        "Fokus utama dan mayoritas isi laporan harus tentang pelanggaran yang terpantau.\n\n"
+        "Anda adalah asisten yang membuat laporan RINGKASAN OPERASIONAL HARIAN untuk "
+        "pemilik restoran/kafe (FnB Owner), berdasarkan hasil pemantauan kamera CCTV. "
+        "Anda akan menerima angka-angka ringkasan yang SUDAH DIHITUNG sebelumnya "
+        "(Overall Operations Score, persentase Active Working Time, Idle Time, "
+        "persentase waktu di dalam/luar zona kerja, dan persentase waktu pelanggaran), "
+        "serta data mentah berisi catatan aktivitas dan pelanggaran per track.\n\n"
+        "PENTING SOAL ANGKA: SEMUA angka yang diberi label 'SUDAH DIHITUNG' harus "
+        "digunakan APA ADANYA. JANGAN menghitung ulang, membulatkan ulang, atau "
+        "mengarang angka sendiri dari membaca baris-baris data mentah.\n\n"
         "PENTING: sistem pelacakan CCTV saat ini belum bisa mengenali identitas individu "
-        "secara akurat — satu karyawan yang sama bisa saja tercatat sebagai beberapa entitas "
-        "berbeda di data mentah. Karena itu, JANGAN memberi label atau penomoran individual "
-        "kepada karyawan (contoh yang DILARANG: 'Karyawan A', 'Karyawan 1', 'Karyawan #2', "
-        "'karyawan pertama'). Cukup gunakan kata 'karyawan' secara umum, atau frasa seperti "
-        "'salah satu karyawan' atau 'beberapa karyawan' jika memang ada lebih dari satu temuan "
-        "yang jelas terpisah. Jangan berasumsi jumlah karyawan berdasarkan banyaknya ID unik "
-        "di data mentah, karena satu ID unik bisa jadi bukan satu karyawan yang berbeda.\n\n"
-        "PENTING SOAL JAM KEJADIAN: setiap kali menyebutkan sebuah pelanggaran, WAJIB "
-        "cantumkan jam kejadiannya jika tersedia di data (dari kolom violation_timestamp), "
-        "contoh: 'sekitar pukul 14:49' atau 'pada 28-07-2026 pukul 14:49:27'. Jika tanggal "
-        "dan jam sama-sama tersedia, cukup sebut jamnya saja kecuali laporan mencakup lebih "
-        "dari satu hari (baru sebut tanggalnya juga). Jika violation_timestamp untuk suatu "
-        "pelanggaran kosong/tidak terbaca (tanda '-'), JANGAN mengarang jam — cukup sebutkan "
-        "pelanggarannya tanpa jam, atau gunakan frasa 'pada salah satu momen pemantauan'.\n\n"
-        "Tulis laporan dalam Bahasa Indonesia yang mudah dipahami oleh pemilik usaha "
-        "yang tidak familiar dengan istilah teknis. Jangan gunakan istilah seperti "
-        "'frame', 'track_id', 'person_id', atau data mentah lainnya.\n\n"
-        "Fokus laporan pada:\n"
-        "- Ringkasan singkat: sebutkan secara singkat berapa lama total pemantauan, "
-        "persentase waktu pelanggaran (jika tersedia), dan gambaran umum kondisi area "
-        "kerja, tanpa membedakan individu, dan tanpa menjabarkan aktivitas normal secara "
-        "panjang lebar.\n"
-        "- Daftar pelanggaran: untuk setiap pelanggaran yang terpantau, jelaskan jenis "
-        "pelanggarannya, jam kejadiannya (wajib jika tersedia), dan seberapa signifikan "
-        "(jangan berlebihan menyimpulkan jika durasinya sangat singkat). Sebut sebagai "
-        "'salah satu karyawan' atau 'terjadi pada salah satu momen', bukan dengan label individu.\n"
-        "- Jika tidak ada pelanggaran berarti, sampaikan itu dengan positif dan laporan "
-        "cukup singkat tanpa bagian daftar pelanggaran.\n"
-        "- Tutup dengan kesimpulan singkat berisi rekomendasi praktis untuk pemilik usaha "
-        "(misalnya perlu ditegur, dipantau lebih lanjut pada jam tertentu, atau tidak perlu tindakan). "
-        "Jika persentase waktu pelanggaran cukup tinggi (di atas 30%), tekankan ini sebagai "
-        "poin yang perlu perhatian di bagian Rekomendasi. Jika persentase sangat kecil "
-        "(di bawah 5%), sampaikan dengan nada yang proporsional, tidak perlu terdengar "
-        "mengkhawatirkan.\n\n"
-        "Gunakan format Markdown sederhana:\n"
-        "- '## Ringkasan Pelanggaran Karyawan' sebagai judul utama.\n"
-        "- Bullet list ('- ') untuk poin-poin temuan pelanggaran.\n"
-        "- Gunakan bold hanya untuk nama pelanggaran, jam kejadian, dan persentase waktu pelanggaran.\n"
-        "- Tutup dengan '### Rekomendasi' berisi saran tindak lanjut.\n"
-        "Jangan gunakan tabel markdown, gambar, atau elemen HTML. Jangan mengarang data "
-        "yang tidak ada di log, termasuk jam atau persentase yang tidak tersedia.\n\n"
-        "Struktur laporan HARUS mengikuti urutan ini secara persis, tanpa menambah heading lain:\n"
-        "1. ### Ringkasan Singkat.\n"
-        "2. ### Temuan Pelanggaran (gabungkan semua temuan tanpa membedakan individu karyawan, "
-        "cantumkan jam kejadian di tiap poin).\n"
-        "3. ### Rekomendasi.\n"
-        "Jika tidak ada pelanggaran, bagian 'Temuan Pelanggaran' cukup berisi satu kalimat "
-        "yang menyatakan tidak ada pelanggaran terdeteksi selama masa pemantauan.\n"
-        "Jangan gunakan heading level 4 (####) atau lebih dalam. "
-        "Jangan gunakan heading di tengah paragraf atau bullet list. "
-        "Setiap bullet point maksimal 2-3 kalimat, jangan buat paragraf panjang dalam satu bullet. "
-        "Jangan buat nested bullet list (bullet di dalam bullet). "
-        "Selalu beri satu baris kosong sebelum dan sesudah heading. "
-        "Jangan gunakan bullet bersarang --) atau numbering campur bullet."
+        "secara akurat. JANGAN memberi label atau penomoran individual kepada karyawan "
+        "(contoh yang DILARANG: 'Karyawan A', 'Karyawan 1'). Cukup gunakan kata "
+        "'karyawan' secara umum, atau frasa seperti 'salah satu karyawan'. Jangan "
+        "berasumsi jumlah karyawan berdasarkan banyaknya ID unik di data mentah.\n\n"
+        "PENTING SOAL JAM KEJADIAN: setiap kali menyebutkan pelanggaran spesifik, WAJIB "
+        "cantumkan jam kejadiannya jika tersedia (kolom violation_timestamp), contoh: "
+        "'sekitar pukul 14:49'. Jika kosong/tidak terbaca ('-'), JANGAN mengarang jam.\n\n"
+        "Tulis laporan dalam Bahasa Indonesia yang mudah dipahami pemilik usaha yang "
+        "tidak familiar dengan istilah teknis. Jangan gunakan istilah seperti 'frame', "
+        "'track_id', 'person_id', atau data mentah lainnya.\n\n"
+        "Struktur laporan HARUS mengikuti urutan ini secara persis:\n"
+        "1. Judul '## Executive Summary'.\n"
+        "2. Baris skor: format persis 'Overall Operations Score: X/100' dengan X diambil "
+        "apa adanya dari data. JANGAN gunakan simbol, emoji, atau indikator warna apa pun "
+        "pada baris ini — cukup teks dan angka saja.\n"
+        "3. Satu paragraf singkat (2-4 kalimat) merangkum kondisi operasional hari ini: "
+        "sebutkan persentase Active Working Time dan tingkat kepatuhan operasional "
+        "(100% dikurangi persentase waktu pelanggaran). Sampaikan penilaian kondisi "
+        "secara naratif dalam kalimat (misalnya 'operasional berjalan baik', 'operasional "
+        "cukup baik namun ada beberapa hal perlu perhatian', atau 'operasional perlu "
+        "perhatian serius') sesuai proporsi angkanya — skor di atas 80 disampaikan "
+        "positif, skor 60-79 disampaikan dengan nada perlu perhatian sedang, skor di "
+        "bawah 60 disampaikan dengan nada perlu perhatian serius. Jangan berlebihan "
+        "menyimpulkan jika angkanya biasa saja.\n"
+        "4. Baris '### Perlu Diperhatikan' diikuti bullet list temuan penting: sebutkan "
+        "pelanggaran signifikan (dengan jam jika tersedia), dan jika persentase waktu "
+        "di luar zona kerja cukup tinggi, sebutkan itu juga sebagai temuan. Jika tidak "
+        "ada temuan berarti, tulis satu kalimat positif saja tanpa bullet list.\n"
+        "5. Baris '### Rekomendasi' berisi 1-3 bullet saran tindak lanjut yang praktis, "
+        "proporsional dengan tingkat keparahan temuan.\n\n"
+        "Jangan gunakan tabel markdown, gambar, atau elemen HTML. Jangan gunakan emoji "
+        "atau simbol indikator warna di bagian manapun dari laporan. Jangan gunakan "
+        "heading level 4 (####) atau lebih dalam. Setiap bullet maksimal 2-3 kalimat. "
+        "Jangan buat nested bullet list. Selalu beri satu baris kosong sebelum dan "
+        "sesudah heading."
     )
 
     stats_text = (
-        f"- Total frame terpantau di area kerja: {stats['total_frame_dipantau_area_kerja']}\n"
-        f"- Total frame terindikasi pelanggaran: {stats['total_frame_pelanggaran']}\n"
+        f"- Overall Operations Score (SUDAH DIHITUNG, gunakan apa adanya, skala 0-100): {ops_score}\n"
+        f"- Persentase Active Working Time (SUDAH DIHITUNG): {activity_stats['persentase_active_working_time']}\n"
+        f"- Persentase Idle Time (SUDAH DIHITUNG): {activity_stats['persentase_idle_time']}\n"
+        f"- Persentase waktu di dalam zona kerja (SUDAH DIHITUNG): {zone_stats['persentase_dalam_zona']}\n"
+        f"- Persentase waktu di luar zona kerja (SUDAH DIHITUNG): {zone_stats['persentase_luar_zona']}\n"
+        f"- Total frame terpantau di area kerja: {violation_stats['total_frame_dipantau_area_kerja']}\n"
+        f"- Total frame terindikasi pelanggaran: {violation_stats['total_frame_pelanggaran']}\n"
         f"- Persentase waktu pelanggaran (SUDAH DIHITUNG, gunakan apa adanya): "
-        f"{stats['persentase_waktu_pelanggaran']}"
+        f"{violation_stats['persentase_waktu_pelanggaran']}"
     )
 
     user_prompt = (
@@ -258,8 +291,19 @@ def generate_summary(log_path: str, video_name: str = "")->str:
 
     rows = load_log(log_path)
     compressed = compress_log(rows)
-    stats = compute_violation_stats(rows)
-    summary_text = call_llm_summary(compressed, stats, video_name=video_name)
+
+    violation_stats = compute_violation_stats(rows)
+    zone_stats = compute_zone_stats(rows)
+    activity_stats = compute_activity_time_stats(rows)
+    ops_score = compute_operations_score(violation_stats, activity_stats)
+
+    summary_text = call_llm_summary(
+        compressed, 
+        violation_stats, 
+        zone_stats,
+        activity_stats,
+        ops_score=ops_score,
+        video_name=video_name)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_name = f"summary-{timestamp}.pdf"
@@ -272,4 +316,4 @@ def generate_summary(log_path: str, video_name: str = "")->str:
 
 
 if __name__ == "__main__":
-    print(generate_summary(log_path="output/violation_log_20260710_143740.csv", video_name="Footage(2 mins).mp4"))
+    print(generate_summary(log_path="output/violation_log_20260731_062245.csv", video_name="Footage(2 mins).mp4"))
