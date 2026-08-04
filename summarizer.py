@@ -325,4 +325,4 @@ def generate_summary(log_path: str, video_name: str = "")->str:
 
 
 if __name__ == "__main__":
-    print(generate_summary(log_path="output/violation_log_20260731_093151.csv", video_name="Footage(2 mins).mp4"))
+    print(generate_summary(log_path="output/violation_log_20260803_235727.csv", video_name="Footage(2 mins).mp4"))

@@ -81,10 +81,10 @@ def extract_cctv_timestamp(frame):
     return None
 
 ZONE_POLYGON = [
-    (505, 1078),
-    (87, 267),
-    (314, 8),
-    (913, 421)
+    (462, 1079),
+    (0, 243),
+    (168, 2),
+    (792, 265)
 ]
 
 
