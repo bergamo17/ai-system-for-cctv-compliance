@@ -22,6 +22,13 @@ SUMMARY_OUTPUT_DIR = "output/summary"
 ANTHROPIC_MODEL = "claude-sonnet-4-6"
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 
+TIMESTAMP_CROP = [
+    (6, 47),
+    (307, 47),
+    (306, 112),
+    (4, 115)
+]
+
 ACTIVITIES = [
     'a person preparing or serving a drink',
     'a person standing behind a counter',

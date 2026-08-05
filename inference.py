@@ -9,12 +9,12 @@ import subprocess
 import pytesseract
 import numpy as np
 from PIL import Image
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import deque, Counter
 from ultralytics import YOLO
 from shapely.geometry import Point, Polygon
 from config import (FRAME_INTERVAL, FRAME_PER_SECOND, PRE_VIOLATION_DURATION, 
-    POST_VIOLATION_DURATION, ACTIVITIES, ACTIVE_ACTIVITIES, VIOLATIONS, IDLE_ACTIVITIES)
+    POST_VIOLATION_DURATION, ACTIVITIES, ACTIVE_ACTIVITIES, VIOLATIONS, IDLE_ACTIVITIES, TIMESTAMP_CROP)
 
 
 # ─────────────────────────────────────────────
@@ -46,12 +46,7 @@ REID_MAX_DISTANCE_PX = 150
 
 VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'mp4v')
 
-TIMESTAMP_CROP = [
-    (6, 47),
-    (307, 47),
-    (306, 112),
-    (4, 115)
-]
+VIDEO_TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M:%S"
 
 def extract_cctv_timestamp(frame):
     xs = [p[0] for p in TIMESTAMP_CROP]
@@ -79,6 +74,13 @@ def extract_cctv_timestamp(frame):
     if match:
         return f"{match.group(1)} {match.group(2)}"
     return None
+
+def compute_frame_timestamp(base_dt, frame_count, fps):
+    if base_dt is None:
+        return None
+    elapsed_seconds = (frame_count - 1) / fps
+    ts = base_dt + timedelta(seconds=elapsed_seconds)
+    return ts.strftime(VIDEO_TIMESTAMP_FORMAT)
 
 ZONE_POLYGON = [
     (462, 1079),
@@ -310,6 +312,22 @@ def run_inference(frame_folder: str):
     print(f"[Inference] Post-buffer: {POST_VIOLATION_FRAME} frame ({POST_VIOLATION_DURATION}) detik")
     print("[Inference] Processing...\n")
 
+    video_base_dt = None
+    first_frame = cv2.imread(frame_files[0])
+    if first_frame is not None:
+        raw_ts = extract_cctv_timestamp(first_frame)
+        if raw_ts:
+            try:
+                video_base_dt = datetime.strptime(raw_ts, VIDEO_TIMESTAMP_FORMAT)
+                print(f"[OCR] Base timestamp video (frame 1): {raw_ts}")
+            except ValueError:
+                print(f"[OCR] Warning: gagal parse '{raw_ts}', violation timestamp akan '-' untuk video ini")
+        else:
+            print("[OCR] WARNING: gagal ekstrak timestamp dari frame pertama,"
+                    "violation_timestamp akan '-' untuk seluruh video ini")
+    else:
+        print(f"[WARN] Gagal baca frame pertama untuk OCR: {frame_files[0]}")
+
     # ── Tracking state — reset tiap video baru ──
     # Dict berikut semuanya di-index pakai track_id (tid), karena history
     # aktivitas & konfirmasi violation itu per-track (hasil YOLO/bytetrack),
@@ -530,8 +548,10 @@ def run_inference(frame_folder: str):
 
                 # OCR HANYA dipanggil sekali, saat transisi COMPLIANT -> VIOLATION
                 if is_confirmed and not last_confirmed[tid]:
-                    violation_timestamp[tid] = extract_cctv_timestamp(frame)
-                    print(f"[OCR] Track {tid} violation terkonfirmasi pada: {violation_timestamp[tid]}")
+                    violation_timestamp[tid] = compute_frame_timestamp(
+                        video_base_dt, frame_count, FRAME_PER_SECOND
+                    )
+                    print(f"[Timestamp] Track {tid} violation terkonfirmasi pada: {violation_timestamp[tid]}")
 
                 last_confirmed[tid] = is_confirmed
 
