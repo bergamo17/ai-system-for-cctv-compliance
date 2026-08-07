@@ -4,6 +4,7 @@ import csv
 import glob
 import cv2
 import torch
+import pickle
 import open_clip
 import subprocess
 import pytesseract
@@ -48,7 +49,70 @@ VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'mp4v')
 
 VIDEO_TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M:%S"
 
+DIGIT_TEMPLATES = {}
+if os.path.exists("digit_templates.pkl"):
+    with open("digit_templates.pkl", "rb") as f:
+        DIGIT_TEMPLATES = pickle.load(f)
+else:
+    print("[WARN] digit_templates.pkl tidak ditemukan, template matching akan selalu fallback ke Tesseract")
+
+def segment_characters(thresh_img, min_w=2, min_h=8):
+    contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    boxes = [cv2.boundingRect(c) for c in contours]
+    boxes = [b for b in boxes if b[2] >= min_w and b[3] >= min_h]
+    boxes.sort(key=lambda b: b[0])
+    return boxes
+
+def match_char(crop, templates, min_confidence=0.5):
+    best_char, best_score = None, -1.0
+    for ch, tmpl in templates.items():
+        if crop.shape[0] == 0 or crop.shape[1] == 0:
+            continue
+        resized = cv2.resize(crop, (tmpl.shape[1], tmpl.shape[0]))
+        res = cv2.matchTemplate(resized, tmpl, cv2.TM_CCOEFF_NORMED)
+        score = float(res[0][0])
+        if score > best_score:
+            best_score, best_char = score, ch
+    if best_score < min_confidence:
+        return None, best_score
+    return best_char, best_score
+
+def extract_cctv_timestamp_template(frame, expected_len=18, min_confidence=0.5):
+    xs = [p[0] for p in TIMESTAMP_CROP]
+    ys = [p[1] for p in TIMESTAMP_CROP]
+    x1, x2 = min(xs), max(xs)
+    y1, y2 = min(ys), max(ys)
+
+    roi = frame[y1:y2, x1:x2]
+    if roi.size == 0:
+        return None
+
+    roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    roi_gray = cv2.resize(roi_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    _, roi_thresh = cv2.threshold(roi_gray, 180, 255, cv2.THRESH_BINARY)
+
+    boxes = segment_characters(roi_thresh)
+
+    if len(boxes) != expected_len:
+        return None
+
+    result_chars = []
+    for (bx, by, bw, bh) in boxes:
+        crop = roi_thresh[by:by+bh, bx:bx+bw]
+        ch, score = match_char(crop, DIGIT_TEMPLATES, min_confidence)
+        if ch is None:
+            return None  # satu karakter aja gagal match, batalkan semua
+        result_chars.append(ch)
+
+    raw = "".join(result_chars)
+    # susun ulang jadi "DD-MM-YYYY HH:MM:SS" (masukin spasi kembali di posisi ke-10)
+    return f"{raw[:10]} {raw[10:]}"
+
 def extract_cctv_timestamp(frame):
+    ts = extract_cctv_timestamp_template(frame)
+    if ts:
+        return ts
+
     xs = [p[0] for p in TIMESTAMP_CROP]
     ys = [p[1] for p in TIMESTAMP_CROP]
     x1, x2 = min(xs), max(xs)
@@ -383,7 +447,7 @@ def run_inference(frame_folder: str):
             csv_file,
             fieldnames=["frame", "frame_file", "track_id", "person_id", "in_zone",
                         "raw_activity", "smoothed_activity", "is_confirmed_violation",
-                        "violation_timestamp"]
+                        "violation_timestamp", "frame_timestamp"]
         )
         writer.writeheader()
 
@@ -395,9 +459,8 @@ def run_inference(frame_folder: str):
 
             frame_count += 1
             frame_filename = os.path.basename(frame_path)
-            # NOTE: OCR timestamp TIDAK dijalankan di sini lagi.
-            # OCR hanya dipanggil saat transisi COMPLIANT -> VIOLATION,
-            # lihat blok "VIOLATION CONFIRMATION" di bawah.
+
+            current_frame_timestamp = compute_frame_timestamp(video_base_dt, frame_count, FRAME_PER_SECOND) or "-"
 
             # ── Cleanup track_id yang sudah lewat grace period ──
             for tid in list(track_last_seen.keys()):
@@ -491,6 +554,7 @@ def run_inference(frame_folder: str):
                         "smoothed_activity"     : "-",
                         "is_confirmed_violation": False,
                         "violation_timestamp"   : "-",
+                        "frame_timestamp": current_frame_timestamp,
                     })
                     continue
 
@@ -581,6 +645,7 @@ def run_inference(frame_folder: str):
                     "smoothed_activity"     : smoothed_label,
                     "is_confirmed_violation": is_confirmed,
                     "violation_timestamp"   : violation_timestamp[tid] or "-",
+                    "frame_timestamp": current_frame_timestamp,
                 }
                 results_log.append(log_entry)
                 writer.writerow(log_entry)
