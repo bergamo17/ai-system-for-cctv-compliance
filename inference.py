@@ -355,6 +355,7 @@ def run_inference(frame_folder: str):
     os.makedirs(OUTPUT_PATH, exist_ok=True)
     os.makedirs(VIOLATION_VIDEO_DIR, exist_ok=True)
     os.makedirs(ANNOTATED_VIDEO_DIR, exist_ok=True)
+    os.makedirs(VIOLATION_FRAMES_DIR, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     violation_log_path = os.path.join(OUTPUT_PATH, f"violation_log_{timestamp}.csv")
@@ -667,6 +668,10 @@ def run_inference(frame_folder: str):
             for pid, vt in video_trackers.items():
                 is_viol = pid in confirmed_pids_this_frame
                 vt.push(frame, is_viol)
+            
+            if frame_has_violation:
+                violation_frame_path = os.path.join(VIOLATION_FRAMES_DIR, f"frame{frame_count:06d}.jpg")
+                cv2.imwrite(violation_frame_path, frame)
 
             if full_video_writer is not None:
                 full_video_writer.write(frame)
