@@ -24,12 +24,6 @@ from config import (FRAME_INTERVAL, FRAME_PER_SECOND, PRE_VIOLATION_DURATION,
 
 INPUT_PATH           = "frames"
 OUTPUT_PATH          = "output"
-VIOLATION_FRAMES_DIR = "output/frames/violation"
-VIOLATION_VIDEO_DIR = "output/videos/violation"
-COMPLIANT_FRAMES_DIR = "output/frames/compliant"
-
-ANNOTATED_VIDEO_DIR = "output/videos/annotated"
-
 
 PRE_VIOLATIONS_FRAME = max(1, int(PRE_VIOLATION_DURATION * FRAME_PER_SECOND))
 POST_VIOLATION_FRAME = max(1, int(POST_VIOLATION_DURATION * FRAME_PER_SECOND))
@@ -350,17 +344,22 @@ zone = Polygon(ZONE_POLYGON)
 #  ENTRY POINT — dipanggil dari watcher
 # ─────────────────────────────────────────────
 
-def run_inference(frame_folder: str):
-    print(f"[DEBUG] PRE_VIOLATIONS_FRAME={PRE_VIOLATIONS_FRAME}, POSt_VIOLATION_FRAME={POST_VIOLATION_FRAME}")
-    os.makedirs(OUTPUT_PATH, exist_ok=True)
-    os.makedirs(VIOLATION_VIDEO_DIR, exist_ok=True)
-    os.makedirs(ANNOTATED_VIDEO_DIR, exist_ok=True)
-    os.makedirs(VIOLATION_FRAMES_DIR, exist_ok=True)
+def run_inference(frame_folder: str, output_dir: str):
+    os.makedirs(output_dir, exist_ok=True)
+    frames_dir = os.path.join(output_dir, "frames")
+    violation_frames_dir = os.path.join(output_dir, "frames/violation")
+    violation_video_dir = os.path.join(output_dir, "videos/violation")
+    annotated_video_dir = os.path.join(output_dir, "videos/annotated")
+
+    os.makedirs(frames_dir, exist_ok=True)
+    os.makedirs(violation_frames_dir, exist_ok=True)
+    os.makedirs(violation_video_dir, exist_ok=True)
+    os.makedirs(annotated_video_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    violation_log_path = os.path.join(OUTPUT_PATH, f"violation_log_{timestamp}.csv")
+    violation_log_path = os.path.join(output_dir, f"violation_log_{timestamp}.csv")
 
-    annotated_video_path = os.path.join(ANNOTATED_VIDEO_DIR, f"annotated_{timestamp}.mp4")
+    annotated_video_path = os.path.join(annotated_video_dir, f"annotated_{timestamp}.mp4")
     full_video_writer = None
 
     # ── Baca frame dari folder ──
@@ -368,7 +367,14 @@ def run_inference(frame_folder: str):
 
     if not frame_files:
         print(f"[Inference] Tidak ada frame di folder: {frame_folder}")
-        return
+        return {
+            "violation_log_path": None,
+            "Annotated_video_path": None,
+            "Total_violations": 0,
+            "Total_detections": 0,
+            "Max_concurrent_persons": 0,
+            "Output_dir": output_dir,
+        }
 
     total_frames = len(frame_files)
     print(f"\n[Inference] Frame folder : {frame_folder}")
@@ -659,7 +665,7 @@ def run_inference(frame_folder: str):
             person_ids_this_frame = {tid_to_person[t] for t in in_zone_tids_this_frame if t in tid_to_person}
             for pid in person_ids_this_frame:
                 if pid not in video_trackers and frame_size is not None:
-                    video_trackers[pid] = ViolationVideoTracker(pid, frame_size, VIOLATION_VIDEO_DIR)
+                    video_trackers[pid] = ViolationVideoTracker(pid, frame_size, violation_video_dir)
 
             confirmed_pids_this_frame = {
                 tid_to_person[t] for t in confirmed_tids_this_frame if t in tid_to_person
@@ -670,7 +676,7 @@ def run_inference(frame_folder: str):
                 vt.push(frame, is_viol)
             
             if frame_has_violation:
-                violation_frame_path = os.path.join(VIOLATION_FRAMES_DIR, f"frame{frame_count:06d}.jpg")
+                violation_frame_path = os.path.join(violation_frames_dir, f"frame{frame_count:06d}.jpg")
                 cv2.imwrite(violation_frame_path, frame)
 
             if full_video_writer is not None:
@@ -707,7 +713,7 @@ def run_inference(frame_folder: str):
     print("\n" + "=" * 50)
     print("DONE")
     print("=" * 50)
-    print(f"Violation frames : {VIOLATION_FRAMES_DIR}/")
+    print(f"Violation frames : {violation_frames_dir}/")
     print(f"Violation log    : {violation_log_path}")
     print(f"Total deteksi    : {len(results_log)}")
     print(f"Total violations : {len(violations)}")
@@ -740,4 +746,4 @@ def run_inference(frame_folder: str):
     return violation_log_path
 
 if __name__ == "__main__":
-    print(run_inference(frame_folder=INPUT_PATH))
+    print(run_inference(frame_folder=INPUT_PATH, output_dir=OUTPUT_PATH))

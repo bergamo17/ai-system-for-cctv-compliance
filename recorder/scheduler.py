@@ -1,7 +1,7 @@
 import logging
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
-from recorder_core import record_stream, TIMEZONE
+from recorder.recorder_core import record_stream, TIMEZONE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +32,7 @@ def main():
             args=[ONE_MINUTE, label],
             trigger=CronTrigger(hour=hour, minute=minute, second=0, timezone=TIMEZONE),
             id=f"record_{label}_{hour:02d}{minute:02d}",
-            misfire_grace_period=120,
+            misfire_grace_time=120,
         )
         logger.info(f"Registered trigger {hour:02d}:{minute:02d} -> {label}")
 

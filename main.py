@@ -5,13 +5,15 @@ from datetime import datetime, date
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Query, Request
 from fastapi.responses import JSONResponse, FileResponse
-from watcher import start_watcher
-from config import INPUT_FOLDER, FRAME_FOLDER, FRAME_INTERVAL, SUMMARY_OUTPUT_DIR
+from pipeline.watcher import start_watcher
+from config import INPUT_FOLDER, FRAME_FOLDER, FRAME_INTERVAL, SUMMARY_OUTPUT_DIR, OUTPUT_FOLDER
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs(INPUT_FOLDER, exist_ok=True)
     os.makedirs(FRAME_FOLDER, exist_ok=True)
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    os.makedirs(SUMMARY_OUTPUT_DIR, exist_ok=True)
     observer = start_watcher()
     print(f"Server ready. Watchdog is active monitors input folder")
 

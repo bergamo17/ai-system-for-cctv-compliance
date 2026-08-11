@@ -5,7 +5,8 @@ load_dotenv()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-INPUT_FOLDER = os.path.join(BASE_DIR, "input")
+INPUT_FOLDER = os.path.join(BASE_DIR, "recordings")
+OUTPUT_FOLDER = os.path.join(BASE_DIR, "output")
 FRAME_FOLDER = os.path.join(BASE_DIR, "frames")
 
 FRAME_INTERVAL = 5

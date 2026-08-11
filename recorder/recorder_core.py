@@ -3,11 +3,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 from zoneinfo import ZoneInfo
+from config import INPUT_FOLDER
 
 load_dotenv()
 
 RTSP_URL = f"rtsp://{os.getenv('RTSP_USERNAME')}:{os.getenv('RTSP_PASSWORD')}@{os.getenv('RTSP_IP')}:{os.getenv('RTSP_PORT')}/Streaming/Channels/101"
-OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "recordings"))
+OUTPUT_DIR = Path(INPUT_FOLDER)
 TIMEZONE_NAME = os.getenv("TIMEZONE")
 TIMEZONE = ZoneInfo(TIMEZONE_NAME)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

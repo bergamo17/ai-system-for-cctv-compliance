@@ -24,14 +24,15 @@ def wait_for_file_complete(path, timeout=30, interval=0.5):
     return False
 
 def chop_video(video_path):
-    os.makedirs(FRAME_FOLDER, exist_ok=True)
-
     print(f"[CAPTURE] Waiting for the new file to finish writing: {video_path}")
     if not wait_for_file_complete(video_path):
         print(f"[ERROR] Waiting file timeout: {video_path}")
 
     video_name = os.path.splitext(os.path.basename(video_path))[0]
-    output_pattern = os.path.join(FRAME_FOLDER, F"{video_name}_frame_%06d.jpg")
+    video_frame_dir = os.path.join(FRAME_FOLDER, video_name)
+    os.makedirs(video_frame_dir, exist_ok=True)
+
+    output_pattern = os.path.join(video_frame_dir, "frame_%06d.jpg")
 
     command = [
         "ffmpeg",
@@ -42,13 +43,15 @@ def chop_video(video_path):
     ]
 
     print(f"[Capture] Chop the video: {video_path}")
-    print(f"[Capture] Output frame to: {FRAME_FOLDER}")
+    print(f"[Capture] Output frame to: {video_frame_dir}")
 
     result = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     if result.returncode != 0:
         print(f"[ERROR] FFmpeg failed:\n{result.stderr.decode()}")
 
     print(f"[Capture] Capture and Chop done: {video_path}")
+
+    return video_frame_dir
     
 if __name__ == "__main__":
     print(chop_video(video_path="input/Footage(2 mins).mp4"))
