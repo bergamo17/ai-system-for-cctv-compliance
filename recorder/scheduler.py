@@ -1,7 +1,7 @@
 import logging
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
-from recorder.recorder_core import record_stream, TIMEZONE
+from recorder.stream_capture import process_stream, TIMEZONE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -10,15 +10,15 @@ logging.basicConfig(
 
 logger = logging.getLogger("scheduler")
 
-ONE_MINUTE = 60
+DURATION = 300
 
 TRIGGERS = [
-    (8, 0, "attendance_sop"),
+    (9, 26, "attendance_sop"),
     (10, 0, "productivity"),
     (12, 0, "peak_productivity"),
     (13, 0, "peak_productivity"),
     (15, 30, "productivity"),
-    (18, 0, "peak_productivity"),
+    (18, 33, "peak_productivity"),
     (19, 0, "peak_productivity"),
     (22, 0, "attendance_sop"),
 ]
@@ -28,8 +28,8 @@ def main():
 
     for hour, minute, label in TRIGGERS:
         scheduler.add_job(
-            record_stream,
-            args=[ONE_MINUTE, label],
+            process_stream,
+            args=[DURATION, label],
             trigger=CronTrigger(hour=hour, minute=minute, second=0, timezone=TIMEZONE),
             id=f"record_{label}_{hour:02d}{minute:02d}",
             misfire_grace_time=120,

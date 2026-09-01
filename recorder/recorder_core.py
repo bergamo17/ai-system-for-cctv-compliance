@@ -17,9 +17,10 @@ logger = logging.getLogger("rtsp_recorder")
 
 def record_stream(duration_seconds: int, label: str = ""):
     timestamp = datetime.now(TIMEZONE).strftime("%Y%m%d_%H%M%S")
-    output_file = OUTPUT_DIR / f"cctv_{label}_{timestamp}.mp4"
+    final_file = OUTPUT_DIR / f"cctv_{label}_{timestamp}.mp4"
+    temp_file = OUTPUT_DIR / f".tmp_cctv_{label}_{timestamp}.mp4"
 
-    logger.info(f"Starting recording [{label}] for {duration_seconds} seconds. Output file: {output_file}")
+    logger.info(f"Starting recording [{label}] for {duration_seconds} seconds. Output file: {final_file}")
 
     cmd = [
         "ffmpeg", "-y",
@@ -28,7 +29,7 @@ def record_stream(duration_seconds: int, label: str = ""):
         "-t", str(duration_seconds),
         "-c:v", "copy",
         "-an",
-        str(output_file),
+        str(temp_file),
     ]
 
     try:
@@ -40,12 +41,17 @@ def record_stream(duration_seconds: int, label: str = ""):
         )
 
         if result.returncode == 0:
-            logger.info(f"Recording completed successfully. Output file: {output_file}")
+            temp_file.rename(final_file)
+            logger.info(f"Recording completed successfully. Output file: {final_file}")
         else:
             logger.error(f"Recording failed with return code {result.returncode}. Error: {result.stderr}")
+            if temp_file.exists():
+                temp_file.unlink()
 
     except subprocess.TimeoutExpired:
         logger.error("Recording process timed out.")
+        if temp_file.exists():
+            temp_file.unlink()
 
     except Exception as e:
         logger.error(f"An unexpected error occurred during recording: {e}")

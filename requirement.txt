@@ -4,3 +4,12 @@ anthropic
 xhtml2pdf
 pytesseract
 numpy
+python-dotenv
+opencv-python
+open_clip_torch
+pytesseract
+shapely
+ultralytics
+Pillow
+numpy
+markdown

@@ -743,7 +743,14 @@ def run_inference(frame_folder: str, output_dir: str):
         print(f"  ID {tid}: {len(tid_logs)} frame IN_ZONE | "
               f"dominant: {dominant} | violations: {len(tid_viols)}")
         
-    return violation_log_path
+    return {
+        "violation_log_path": violation_log_path,
+        "Annotated_video_path": annotated_video_path,
+        "Total_violations": len(violations),
+        "Total_detections": len(results_log),
+        "Max_concurrent_persons": max_concurrent_persons,
+        "Output_dir": output_dir,
+    }
 
 if __name__ == "__main__":
     print(run_inference(frame_folder=INPUT_PATH, output_dir=OUTPUT_PATH))
