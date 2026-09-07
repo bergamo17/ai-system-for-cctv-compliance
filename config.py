@@ -18,7 +18,8 @@ POST_VIOLATION_DURATION = 5
 #VIOLATION_LOG_PATH   = "output/violation_log.csv"
 
 HF_TOKEN = os.getenv('HF_TOKEN')
-OPENAI_MODEL = "gpt-5-nano"
+OPENAI_MODEL = "gpt-4o"
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 MODEL = "moonshotai/Kimi-K2.6:novita"  #"moonshotai/Kimi-K2-Instruct-0905:novita"
 SUMMARY_OUTPUT_DIR = "output/summary"
 
@@ -33,39 +34,41 @@ TIMESTAMP_CROP = [
 ]
 
 ACTIVITIES = [
-    'a person preparing or serving a drink',
-    'a person standing behind a counter',
-    'a person talking to a customer at a counter',
-    'a person cleaning or organizing the counter',
-    'a person walking behind the counter',
+    # 'a person preparing or serving a drink',
+    # 'a person standing behind a counter',
+    # 'a person talking to a customer at a counter',
+    # 'a person cleaning or organizing the counter',
+    # 'a person walking behind the counter',
     'a person sitting idle doing nothing',
     'a person using a phone',
     'a person eating food',
-    'a person lying down sleeping',
+    # 'a person lying down sleeping',
+    'a person using laptop or computer',
 ]
 
 # VIOLATIONS harus selalu subset dari ACTIVITIES
 VIOLATIONS = [
     'a person using a phone',
-    'a person eating food',
-    'a person lying down sleeping',
+    # 'a person eating food',
+    # 'a person lying down sleeping',
     'a person sitting idle doing nothing',
 ]
 
 # ACTIVE_ACTIVITIES + IDLE_ACTIVITIES harus selalu partisi lengkap dari ACTIVITIES
 ACTIVE_ACTIVITIES = [
-    'a person preparing or serving a drink',
-    'a person talking to a customer at a counter',
-    'a person cleaning or organizing the counter',
-    'a person walking behind the counter',
+    # 'a person preparing or serving a drink',
+    # 'a person talking to a customer at a counter',
+    # 'a person cleaning or organizing the counter',
+    # 'a person walking behind the counter',
+    'a person using laptop or computer',
 ]
 
 IDLE_ACTIVITIES = [
-    'a person standing behind a counter',
+    # 'a person standing behind a counter',
     'a person sitting idle doing nothing',
     'a person using a phone',
     'a person eating food',
-    'a person lying down sleeping',
+    # 'a person lying down sleeping',
 ]
 
 assert set(VIOLATIONS).issubset(set(ACTIVITIES)), "VIOLATIONS harus subset dari ACTIVITIES"

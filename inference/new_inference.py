@@ -4,6 +4,7 @@ import csv
 import glob
 import cv2
 import torch
+import json
 import pickle
 import open_clip
 import subprocess
@@ -141,13 +142,26 @@ def compute_frame_timestamp(base_dt, frame_count, fps):
     ts = base_dt + timedelta(seconds=elapsed_seconds)
     return ts.strftime(VIDEO_TIMESTAMP_FORMAT)
 
-ZONE_POLYGON = [
-    (462, 1079),
-    (0, 243),
-    (168, 2),
-    (792, 265)
-]
+# ZONE_POLYGON = [
+#     (462, 1079),
+#     (0, 243),
+#     (168, 2),
+#     (792, 265)
+# ]
 
+ZONE_POLYGON_PATH = "zone_polygon.json"
+
+if os.path.exists(ZONE_POLYGON_PATH):
+    with open(ZONE_POLYGON_PATH) as f:
+        ZONE_POLYGON = [tuple(pt) for pt in json.load(f)]
+else:
+    # fallback kalau zone_polygon.json belum pernah dibuat lewat define_zone.py
+    ZONE_POLYGON = [
+        (462, 1079),
+        (0, 243),
+        (168, 2),
+        (792, 265)
+    ]
 
 # ─────────────────────────────────────────────
 #  HELPER: DRAW LABEL (identik dengan inference.py)
@@ -441,18 +455,18 @@ class InferenceSession:
             h, w = frame.shape[:2]
             self.frame_size = (w, h)
 
-            self.full_video_writer = cv2.VideoWriter(
-                self.annotated_video_path, VIDEO_FOURCC, FRAME_PER_SECOND, self.frame_size
-            )
-            print(f"[Inference] Full annotated video -> {self.annotated_video_path}")
+            # self.full_video_writer = cv2.VideoWriter(
+            #     self.annotated_video_path, VIDEO_FOURCC, FRAME_PER_SECOND, self.frame_size
+            # )
+            # print(f"[Inference] Full annotated video -> {self.annotated_video_path}")
 
         # ── Jalankan YOLO ──
         yolo_results = yolo_model.track(frame, conf=0.35, persist=True, tracker="bytetrack.yaml", verbose=False)
         boxes = yolo_results[0].boxes
 
         if boxes.id is None:
-            if self.full_video_writer is not None:
-                self.full_video_writer.write(frame)
+            # if self.full_video_writer is not None:
+            #     self.full_video_writer.write(frame)
 
             if frame_count % 30 == 0:
                 print(f"[Inference] Progress: {frame_count} frame diproses")
@@ -615,8 +629,8 @@ class InferenceSession:
             violation_frame_path = os.path.join(self.violation_frames_dir, f"frame{frame_count:06d}.jpg")
             cv2.imwrite(violation_frame_path, frame)
 
-        if self.full_video_writer is not None:
-            self.full_video_writer.write(frame)
+        # if self.full_video_writer is not None:
+        #     self.full_video_writer.write(frame)
 
         if frame_count % 30 == 0:
             print(f"[Inference] Progress: {frame_count} frame diproses")
@@ -634,22 +648,22 @@ class InferenceSession:
         for tid, vt in self.video_trackers.items():
             vt.finalize()
 
-        if self.full_video_writer is not None:
-            self.full_video_writer.release()
-            print(f"[Inference] Full annotated video selesai (raw) -> {self.annotated_video_path}")
+        # if self.full_video_writer is not None:
+        #     self.full_video_writer.release()
+        #     print(f"[Inference] Full annotated video selesai (raw) -> {self.annotated_video_path}")
 
-            tmp_path = self.annotated_video_path.replace(".mp4", "_tmp.mp4")
-            os.rename(self.annotated_video_path, tmp_path)
-            subprocess.run([
-                "ffmpeg", "-y",
-                "-i", tmp_path,
-                "-vcodec", "libx264",
-                "-crf", "23",
-                "-preset", "fast",
-                self.annotated_video_path
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            os.remove(tmp_path)
-            print(f"[Inference] Konversi H.264 selesai -> {self.annotated_video_path}")
+        #     tmp_path = self.annotated_video_path.replace(".mp4", "_tmp.mp4")
+        #     os.rename(self.annotated_video_path, tmp_path)
+        #     subprocess.run([
+        #         "ffmpeg", "-y",
+        #         "-i", tmp_path,
+        #         "-vcodec", "libx264",
+        #         "-crf", "23",
+        #         "-preset", "fast",
+        #         self.annotated_video_path
+        #     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        #     os.remove(tmp_path)
+        #     print(f"[Inference] Konversi H.264 selesai -> {self.annotated_video_path}")
 
         if self.csv_file is not None:
             self.csv_file.close()

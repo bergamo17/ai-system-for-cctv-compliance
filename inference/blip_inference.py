@@ -2,20 +2,18 @@ import os
 import csv
 import glob
 import cv2
-#import torch
-#import open_clip
+import torch
+import open_clip
 import subprocess
 import time
-import base64
-from io import BytesIO
-from openai import OpenAI
 import numpy as np
 from PIL import Image
 from datetime import datetime
 from collections import deque, Counter
 from ultralytics import YOLO
 from shapely.geometry import Point, Polygon
-from config import FRAME_INTERVAL, FRAME_PER_SECOND, PRE_VIOLATION_DURATION, POST_VIOLATION_DURATION, HF_TOKEN, MODEL
+from transformers import BlipProcessor, BlipForConditionalGeneration
+from config import FRAME_INTERVAL, FRAME_PER_SECOND, PRE_VIOLATION_DURATION, POST_VIOLATION_DURATION
 
 
 # ─────────────────────────────────────────────
@@ -36,6 +34,7 @@ SMOOTHING_WINDOW        = 10   # majority voting dari N inferensi terakhir per t
 VIOLATION_CONFIRM_FRAMES = 1  # violation dikonfirmasi setelah N inferensi violation berturut-turut
 IOU_THRESHOLD           = 0.4  # minimum IoU untuk mencocokkan bbox ke track yang sama
 GRACE_PERIOD_FRAMES     = 30   # frame sebelum track dihapus jika tidak terdeteksi
+BLIP_CAPTION_INTERVAL_FRAMES = 10  # BLIP hanya jalan 1x tiap N frame yang dicapture; CLIP tetap jalan tiap frame
 
 VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'mp4v')
 
@@ -66,33 +65,30 @@ VIOLATIONS = [
     'a person sitting idle doing nothing',
 ]
 
-vision_client = OpenAI(
-    base_url="https://router.huggingface.co/v1",
-    api_key=HF_TOKEN,
-)
-
-
 # ─────────────────────────────────────────────
-#  HELPER: DRAW LABEL
+#  HELPER: DRAW LABEL (mendukung N baris teks)
 # ─────────────────────────────────────────────
 
-def draw_label(frame, text1, text2, x1, y1, x2, y2, color):
+def draw_label(frame, lines, x1, y1, x2, y2, color):
     font       = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.6
     thickness  = 2
     padding    = 4
 
-    (w1, h1), _ = cv2.getTextSize(text1, font, font_scale, thickness)
-    (w2, h2), _ = cv2.getTextSize(text2, font, font_scale, thickness)
+    heights = [cv2.getTextSize(t, font, font_scale, thickness)[0][1] for t in lines]
+    total_h = sum(heights) + padding * (len(lines) + 1)
 
-    if y1 - h1 - h2 - padding * 3 >= 0:
-        ty2 = y1 - padding
-        ty1 = ty2 - h2 - padding
-        cv2.putText(frame, text1, (x1, ty1), font, font_scale, color, thickness)
-        cv2.putText(frame, text2, (x1, ty2), font, font_scale, color, thickness)
+    if y1 - total_h >= 0:
+        y = y1 - padding
+        for text, h in zip(reversed(lines), reversed(heights)):
+            cv2.putText(frame, text, (x1, y), font, font_scale, color, thickness)
+            y -= (h + padding)
     else:
-        cv2.putText(frame, text1, (x1 + padding, y1 + h1 + padding),          font, font_scale, color, thickness)
-        cv2.putText(frame, text2, (x1 + padding, y1 + h1 + h2 + padding * 2), font, font_scale, color, thickness)
+        y = y1 + padding
+        for text, h in zip(lines, heights):
+            y += h
+            cv2.putText(frame, text, (x1 + padding, y), font, font_scale, color, thickness)
+            y += padding
 
 
 # ─────────────────────────────────────────────
@@ -236,6 +232,25 @@ print("Load YOLO model...")
 yolo_model = YOLO("yolov8s-worldv2.pt")
 yolo_model.set_classes(['person'])
 
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Device: {device}")
+
+print("Load OpenCLIP model...")
+clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
+    'ViT-B-32', pretrained='laion2b_s34b_b79k', device=device
+)
+clip_tokenizer = open_clip.get_tokenizer('ViT-B-32')
+
+activity_tokens = clip_tokenizer(ACTIVITIES).to(device)
+with torch.no_grad():
+    activity_features = clip_model.encode_text(activity_tokens)
+    activity_features /= activity_features.norm(dim=-1, keepdim=True)
+
+print("Load BLIP captioning model...")
+BLIP_MODEL_NAME = "Salesforce/blip-image-captioning-base"
+blip_processor = BlipProcessor.from_pretrained(BLIP_MODEL_NAME)
+blip_model = BlipForConditionalGeneration.from_pretrained(BLIP_MODEL_NAME).to(device)
+blip_model.eval()
 
 zone = Polygon(ZONE_POLYGON)
 
@@ -244,20 +259,13 @@ zone = Polygon(ZONE_POLYGON)
 #  ENTRY POINT — dipanggil dari watcher
 # ─────────────────────────────────────────────
 
-def encode_crop_to_base64(crop_bgr) -> str:
+def generate_caption(crop_bgr) -> str:
     crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(crop_rgb)
-    buffer = BytesIO()
-    pil_image.save(buffer, format="JPEG", quality=80)
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-def classify_activity(crop_bgr, activities: list[str], max_retries: int = 2) -> str:
-    b64 = encode_crop_to_base64(crop_bgr)
-    option_next = "\n".join(f"{i+1}. {act}" for i, act in enumerate(activities))
-
-    prompt_text = (
-        
-    )
+    inputs = blip_processor(pil_image, return_tensors="pt").to(device)
+    with torch.no_grad():
+        out = blip_model.generate(**inputs, max_new_tokens=30)
+    return blip_processor.decode(out[0], skip_special_tokens=True)
 
 
 def run_inference(frame_folder: str):
@@ -290,6 +298,7 @@ def run_inference(frame_folder: str):
     violation_counter= {}
     last_smoothed    = {}
     last_confirmed   = {}
+    last_caption     = {}
 
     video_trackers: dict[int, ViolationVideoTracker] = {}
 
@@ -301,7 +310,7 @@ def run_inference(frame_folder: str):
         writer = csv.DictWriter(
             csv_file,
             fieldnames=["frame", "frame_file", "track_id", "in_zone",
-                        "raw_activity", "smoothed_activity", "is_confirmed_violation"]
+                        "raw_activity", "smoothed_activity", "is_confirmed_violation", "caption"]
         )
         writer.writeheader()
 
@@ -348,6 +357,7 @@ def run_inference(frame_folder: str):
                     violation_counter[tid] = 0
                     last_smoothed[tid]     = "-"
                     last_confirmed[tid]    = False
+                    last_caption[tid]      = "-"
 
                 foot_x  = (x1 + x2) // 2
                 foot_y  = y2
@@ -368,6 +378,7 @@ def run_inference(frame_folder: str):
                         "raw_activity"          : "-",
                         "smoothed_activity"     : "-",
                         "is_confirmed_violation": False,
+                        "caption"               : "-",
                     })
                     continue
 
@@ -406,17 +417,23 @@ def run_inference(frame_folder: str):
                 if is_confirmed:
                     confirmed_tids_this_frame.add(tid)
 
+                # ── BLIP CAPTION: cukup jalan 1x tiap N frame, sisanya reuse cache ──
+                if frame_count % BLIP_CAPTION_INTERVAL_FRAMES == 0:
+                    last_caption[tid] = generate_caption(crop)
+                caption = last_caption[tid]
+
                 # ── RENDER ──
                 clean_label = smoothed_label.replace("a person", "").strip()
                 box_color   = (0, 0, 255) if is_confirmed else (0, 255, 0)
                 status_text = "VIOLATION" if is_confirmed else "COMPLIANT"
+                caption_display = caption if len(caption) <= 60 else caption[:57] + "..."
 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
                 cv2.circle(frame, (foot_x, foot_y), 5, box_color, -1)
                 cv2.putText(frame, f"ID:{tid}",
                             (x1, y1 - 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1)
-                draw_label(frame, clean_label, status_text, x1, y1, x2, y2, box_color)
+                draw_label(frame, [clean_label, status_text, caption_display], x1, y1, x2, y2, box_color)
 
                 # ── LOG ──
                 log_entry = {
@@ -427,6 +444,7 @@ def run_inference(frame_folder: str):
                     "raw_activity"          : raw_label,
                     "smoothed_activity"     : smoothed_label,
                     "is_confirmed_violation": is_confirmed,
+                    "caption"               : caption,
                 }
                 results_log.append(log_entry)
                 writer.writerow(log_entry)
@@ -450,7 +468,7 @@ def run_inference(frame_folder: str):
                         del video_trackers[tid]
                         
                     del active_tracks[tid]
-                    for state in [activity_history, violation_counter, last_smoothed, last_confirmed]:
+                    for state in [activity_history, violation_counter, last_smoothed, last_confirmed, last_caption]:
                         if tid in state:
                             del state[tid]
 

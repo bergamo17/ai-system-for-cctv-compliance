@@ -10,14 +10,14 @@ logging.basicConfig(
 
 logger = logging.getLogger("scheduler")
 
-DURATION = 300
+DURATION = 120 #600
 
 TRIGGERS = [
     (9, 26, "attendance_sop"),
     (10, 0, "productivity"),
     (12, 0, "peak_productivity"),
-    (13, 0, "peak_productivity"),
-    (15, 30, "productivity"),
+    (13, 35, "peak_productivity"),
+    (15, 35, "productivity"),
     (18, 33, "peak_productivity"),
     (19, 0, "peak_productivity"),
     (22, 0, "attendance_sop"),

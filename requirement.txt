@@ -13,3 +13,5 @@ ultralytics
 Pillow
 numpy
 markdown
+transformers
+torch

@@ -15,14 +15,16 @@ from config import (
     ACTIVE_ACTIVITIES,
     IDLE_ACTIVITIES,
     HF_TOKEN,
-    MODEL
+    MODEL,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
 )
 
 logger = logging.getLogger(__name__)
 
 fallback_client = OpenAI(
-   base_url= "https://router.huggingface.co/v1",
-   api_key=HF_TOKEN,
+#    base_url= "https://router.huggingface.co/v1",
+   api_key=OPENAI_API_KEY,
 )
 
 
@@ -254,7 +256,7 @@ def _call_fallback_model(user_prompt):
     print(f"[SUMMARIZER] Estimasi input token: {estimated_tokens}")
 
     response = fallback_client.chat.completions.create(
-        model=MODEL,
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -296,7 +298,7 @@ def call_llm_summary(
     try:
         summary_text = _call_claude(user_prompt=user_prompt)
     except APIError as e:
-        logger.warning(f"Claude failed ({type(e).__name__}), fallback ke KIMI")
+        logger.warning(f"{ANTHROPIC_MODEL} failed ({type(e).__name__}), fallback ke {OPENAI_MODEL}: {e}")
         try:
             summary_text = _call_fallback_model(user_prompt=user_prompt)
         except OpenAIAPIError as e2:
