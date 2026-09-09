@@ -113,18 +113,10 @@ def _run_ffmpeg_capture(cmd: list[str], duration_seconds: int) -> bool:
     return True
 
 
-def process_stream(duration_seconds: int, label: str = "", start_dt: datetime | None = None):
+def process_stream(duration_seconds: int, label: str = ""):
     """Capture RTSP -> tiap frame baru langsung diproses InferenceSession
-    (paralel dengan capture yang masih berjalan) -> finalize -> summary.
-
-    start_dt: jam mulai capture, dipakai sebagai basis frame_timestamp di
-    log inference (base_dt + frame_count/fps, fps=1 -> +1 detik/frame).
-    Kalau tidak diisi (misal dipanggil scheduler.py), default jam sekarang --
-    yaitu jam trigger-nya sendiri."""
-    if start_dt is None:
-        start_dt = datetime.now(TIMEZONE)
-
-    timestamp = start_dt.strftime("%Y%m%d_%H%M%S")
+    (paralel dengan capture yang masih berjalan) -> finalize -> summary."""
+    timestamp = datetime.now(TIMEZONE).strftime("%Y%m%d_%H%M%S")
     video_name = f"cctv_{label}_{timestamp}" if label else f"cctv_{timestamp}"
 
     tmp_frame_dir = Path(FRAME_FOLDER) / f".tmp_{video_name}"
@@ -143,7 +135,7 @@ def process_stream(duration_seconds: int, label: str = "", start_dt: datetime | 
         output_pattern,
     ]
 
-    session = InferenceSession(output_dir, start_dt=start_dt)
+    session = InferenceSession(output_dir)
     frame_queue: "queue.Queue" = queue.Queue()
 
     worker_thread = threading.Thread(target=_frame_worker, args=(session, frame_queue), daemon=True)
@@ -173,7 +165,7 @@ def process_stream(duration_seconds: int, label: str = "", start_dt: datetime | 
             logger.info(f"Tidak ada frame terdeteksi untuk {video_name}, skip summary.")
         else:
             logger.info(f"Inference selesai, generate summary: {video_name}")
-            summary = generate_summary(result["violation_log_path"], video_name=video_name, session_start=start_dt.isoformat())
+            summary = generate_summary(result["violation_log_path"], video_name=video_name)
             logger.info(f"Summary:\n{summary}")
     except Exception as e:
         logger.error(f"Gagal generate summary untuk {video_name}: {e}")
@@ -193,26 +185,9 @@ if __name__ == "__main__":
     )
     parser.add_argument("--duration", type=int, default=300, help="Durasi capture dalam detik (default: 300)")
     parser.add_argument("--label", type=str, default="", help="Label sesi capture (contoh: productivity)")
-    parser.add_argument("--start-time", type=str, default=None,
-                         help="Jam mulai capture, format HH:MM atau HH:MM:SS (default: jam sekarang). "
-                              "Dipakai sebagai basis frame_timestamp di violation log.")
     args = parser.parse_args()
 
     os.makedirs(FRAME_FOLDER, exist_ok=True)
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-    start_dt = None
-    if args.start_time:
-        now = datetime.now(TIMEZONE)
-        for fmt in ("%H:%M:%S", "%H:%M"):
-            try:
-                parsed = datetime.strptime(args.start_time, fmt)
-                start_dt = now.replace(hour=parsed.hour, minute=parsed.minute,
-                                        second=parsed.second, microsecond=0)
-                break
-            except ValueError:
-                continue
-        if start_dt is None:
-            parser.error("--start-time harus format HH:MM atau HH:MM:SS")
-
-    process_stream(args.duration, args.label, start_dt=start_dt)
+    process_stream(args.duration, args.label)

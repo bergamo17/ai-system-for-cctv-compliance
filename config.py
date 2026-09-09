@@ -10,7 +10,6 @@ OUTPUT_FOLDER = os.path.join(BASE_DIR, "output")
 FRAME_FOLDER = os.path.join(BASE_DIR, "frames")
 
 KAGGLE_INFERENCE_URL = os.getenv('KAGGLE_INFERENCE_URL')
-DB_PATH = "pipeline/db/Popcorn.db"
 
 FRAME_INTERVAL = 5
 FRAME_PER_SECOND = 1 #25 / FRAME_INTERVAL
