@@ -28,3 +28,7 @@ docs/
 # Employees
 employees/
 weights/
+
+# DB
+pipeline/db/*.db
+Popcorn
