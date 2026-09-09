@@ -1,5 +1,6 @@
 import os
 import csv
+import sqlite3
 import logging
 import datetime
 import tiktoken
@@ -18,6 +19,7 @@ from config import (
     MODEL,
     OPENAI_API_KEY,
     OPENAI_MODEL,
+    DB_PATH,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,48 @@ main_client = Anthropic(
     api_key= ANTHROPIC_API_KEY,
 )
 # Baca Log
+
+def _pct_to_float(pct_str: str) -> float:
+    return float(pct_str.rstrip("%"))
+
+def save_summary_to_db(
+        video_name: str,
+        session_start: str,
+        ops_score: int | None,
+        activity_stats: dict,
+        violation_stats: dict,
+        zone_stats: dict,
+        summary_text: str,
+        pdf_path: str,
+) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO summaries (
+                video_name, session_start, ops_score,
+                active_pct, idle_pct, violations_pct,
+                zone_in_pct, zone_out_pct,
+                summary_text, pdf_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                video_name,
+                session_start,
+                ops_score,
+                _pct_to_float(activity_stats["persentase_active_working_time"]),
+                _pct_to_float(activity_stats["persentase_idle_time"]),
+                _pct_to_float(violation_stats["persentase_waktu_pelanggaran"]),
+                _pct_to_float(zone_stats["persentase_dalam_zona"]),
+                _pct_to_float(zone_stats["persentase_luar_zona"]),
+                summary_text,
+                pdf_path,
+            ),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
 
 def load_log(log_path: str):
     rows = []
@@ -356,7 +400,11 @@ def markdown_to_pdf(md_text: str, out_path: str):
     if pisa_status.err:
         raise RuntimeError(f"Gagal memuat pdf: {out_path}")
 
-def generate_summary(log_path: str, video_name: str = "")->str:
+def generate_summary(
+        log_path: str, 
+        video_name: str = "",
+        session_start: str | None = None,
+    )->str:
     os.makedirs(SUMMARY_OUTPUT_DIR, exist_ok=True)
 
     rows = load_log(log_path)
@@ -380,6 +428,17 @@ def generate_summary(log_path: str, video_name: str = "")->str:
     out_path = os.path.join(SUMMARY_OUTPUT_DIR, out_name)
 
     markdown_to_pdf(summary_text, out_path)
+
+    save_summary_to_db(
+        video_name=video_name,
+        session_start=session_start or datetime.datetime.now().isoformat(),
+        ops_score=ops_score,
+        activity_stats=activity_stats,
+        violation_stats=violation_stats,
+        zone_stats=zone_stats,
+        summary_text=summary_text,
+        pdf_path=out_path,
+    )
 
     print(f"[SUMMARIZER] Ringkasan disimpan -> {out_path}")
     return summary_text

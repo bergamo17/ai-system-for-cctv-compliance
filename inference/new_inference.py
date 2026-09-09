@@ -1,14 +1,11 @@
 import os
-import re
 import csv
 import glob
 import cv2
 import torch
 import json
-import pickle
 import open_clip
 import subprocess
-import pytesseract
 import numpy as np
 from PIL import Image
 from datetime import datetime, timedelta
@@ -16,7 +13,7 @@ from collections import deque, Counter
 from ultralytics import YOLO
 from shapely.geometry import Point, Polygon
 from config import (FRAME_INTERVAL, FRAME_PER_SECOND, PRE_VIOLATION_DURATION,
-    POST_VIOLATION_DURATION, ACTIVITIES, ACTIVE_ACTIVITIES, VIOLATIONS, IDLE_ACTIVITIES, TIMESTAMP_CROP)
+    POST_VIOLATION_DURATION, ACTIVITIES, ACTIVE_ACTIVITIES, VIOLATIONS, IDLE_ACTIVITIES)
 
 
 # ─────────────────────────────────────────────
@@ -53,96 +50,12 @@ VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'mp4v')
 
 VIDEO_TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M:%S"
 
-DIGIT_TEMPLATES = {}
-if os.path.exists("digit_templates.pkl"):
-    with open("digit_templates.pkl", "rb") as f:
-        DIGIT_TEMPLATES = pickle.load(f)
-else:
-    print("[WARN] digit_templates.pkl tidak ditemukan, template matching akan selalu fallback ke Tesseract")
-
 
 # ─────────────────────────────────────────────
-#  HELPER: OCR TIMESTAMP (identik dengan inference.py)
+#  HELPER: FRAME TIMESTAMP
+#  base_dt sekarang datang dari trigger saat sesi inference dijalankan
+#  (lihat InferenceSession.__init__), bukan lagi hasil OCR overlay CCTV.
 # ─────────────────────────────────────────────
-
-def segment_characters(thresh_img, min_w=2, min_h=8):
-    contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    boxes = [cv2.boundingRect(c) for c in contours]
-    boxes = [b for b in boxes if b[2] >= min_w and b[3] >= min_h]
-    boxes.sort(key=lambda b: b[0])
-    return boxes
-
-def match_char(crop, templates, min_confidence=0.5):
-    best_char, best_score = None, -1.0
-    for ch, tmpl in templates.items():
-        if crop.shape[0] == 0 or crop.shape[1] == 0:
-            continue
-        resized = cv2.resize(crop, (tmpl.shape[1], tmpl.shape[0]))
-        res = cv2.matchTemplate(resized, tmpl, cv2.TM_CCOEFF_NORMED)
-        score = float(res[0][0])
-        if score > best_score:
-            best_score, best_char = score, ch
-    if best_score < min_confidence:
-        return None, best_score
-    return best_char, best_score
-
-def extract_cctv_timestamp_template(frame, expected_len=18, min_confidence=0.5):
-    xs = [p[0] for p in TIMESTAMP_CROP]
-    ys = [p[1] for p in TIMESTAMP_CROP]
-    x1, x2 = min(xs), max(xs)
-    y1, y2 = min(ys), max(ys)
-
-    roi = frame[y1:y2, x1:x2]
-    if roi.size == 0:
-        return None
-
-    roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    roi_gray = cv2.resize(roi_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    _, roi_thresh = cv2.threshold(roi_gray, 180, 255, cv2.THRESH_BINARY)
-
-    boxes = segment_characters(roi_thresh)
-
-    if len(boxes) != expected_len:
-        return None
-
-    result_chars = []
-    for (bx, by, bw, bh) in boxes:
-        crop = roi_thresh[by:by+bh, bx:bx+bw]
-        ch, score = match_char(crop, DIGIT_TEMPLATES, min_confidence)
-        if ch is None:
-            return None
-        result_chars.append(ch)
-
-    raw = "".join(result_chars)
-    return f"{raw[:10]} {raw[10:]}"
-
-def extract_cctv_timestamp(frame):
-    ts = extract_cctv_timestamp_template(frame)
-    if ts:
-        return ts
-
-    xs = [p[0] for p in TIMESTAMP_CROP]
-    ys = [p[1] for p in TIMESTAMP_CROP]
-    x1, x2 = min(xs), max(xs)
-    y1, y2 = min(ys), max(ys)
-
-    roi = frame[y1:y2, x1:x2]
-    if roi.size == 0:
-        return None
-
-    roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    roi_gray = cv2.resize(roi_gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    _, roi_thresh = cv2.threshold(roi_gray, 180, 255, cv2.THRESH_BINARY)
-
-    text = pytesseract.image_to_string(
-        roi_thresh,
-        config="--psm 7 -c tessedit_char_whitelist=0123456789-:MonTueWedThuFriSatSun "
-    )
-
-    match = re.search(r"(\d{2}-\d{2}-\d{4}).*?(\d{2}:\d{2}:\d{2})", text)
-    if match:
-        return f"{match.group(1)} {match.group(2)}"
-    return None
 
 def compute_frame_timestamp(base_dt, frame_count, fps):
     if base_dt is None:
@@ -343,7 +256,10 @@ zone = Polygon(ZONE_POLYGON)
 # ─────────────────────────────────────────────
 
 class InferenceSession:
-    def __init__(self, output_dir: str):
+    def __init__(self, output_dir: str, start_dt: datetime | None = None):
+        """start_dt: jam mulai sesi (trigger AI system dijalankan), dipakai
+        sebagai basis perhitungan frame_timestamp (base_dt + frame_count/fps).
+        Kalau None, frame_timestamp akan '-' untuk seluruh sesi ini."""
         self.output_dir = output_dir
         self.frames_dir = os.path.join(output_dir, "frames")
         self.violation_frames_dir = os.path.join(output_dir, "frames/violation")
@@ -367,7 +283,7 @@ class InferenceSession:
         self.writer = None
         self.full_video_writer = None
 
-        self.video_base_dt = None
+        self.video_base_dt = start_dt
 
         # state per track_id (hasil YOLO/bytetrack)
         self.track_last_seen     = {}
@@ -487,19 +403,6 @@ class InferenceSession:
                             "employee_id", "employee_name", "employee_score"]
             )
             self.writer.writeheader()
-
-        # OCR timestamp cuma dijalankan sekali, dari frame PERTAMA yang datang
-        if self.video_base_dt is None:
-            raw_ts = extract_cctv_timestamp(frame)
-            if raw_ts:
-                try:
-                    self.video_base_dt = datetime.strptime(raw_ts, VIDEO_TIMESTAMP_FORMAT)
-                    print(f"[OCR] Base timestamp video (frame 1): {raw_ts}")
-                except ValueError:
-                    print(f"[OCR] Warning: gagal parse '{raw_ts}', violation timestamp akan '-' untuk video ini")
-            else:
-                print("[OCR] WARNING: gagal ekstrak timestamp dari frame pertama,"
-                      "violation_timestamp akan '-' untuk seluruh video ini")
 
         self.frame_count += 1
         frame_count = self.frame_count
