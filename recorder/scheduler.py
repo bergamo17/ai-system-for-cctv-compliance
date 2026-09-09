@@ -17,8 +17,8 @@ TRIGGERS = [
     (10, 0, "productivity"),
     (12, 0, "peak_productivity"),
     (13, 35, "peak_productivity"),
-    (15, 35, "productivity"),
-    (18, 33, "peak_productivity"),
+    (16, 42, "productivity"),
+    (17, 4, "peak_productivity"),
     (19, 0, "peak_productivity"),
     (22, 0, "attendance_sop"),
 ]

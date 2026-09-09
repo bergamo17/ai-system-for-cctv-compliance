@@ -40,6 +40,15 @@ REID_MAX_GAP_FRAMES = 90
 REID_MIN_COSINE_SCORE = 0.9
 REID_MAX_DISTANCE_PX = 150
 
+# ── Face identification (Fase 3, docs/face-recognition-plan.md) ──
+FACE_ID_ENABLED            = True   # master switch, default OFF
+FACE_ID_STORE_PATH         = "weights/faces/employees.npz"
+FACE_ID_RETRY_EVERY_FRAMES = 15      # jangan coba tiap frame
+FACE_ID_MAX_ATTEMPTS       = 8       # setelah ini, person_id ditandai UNKNOWN permanen
+FACE_MIN_SCORE             = 0.30
+FACE_MIN_MARGIN            = 0.10
+FACE_MIN_FACE_PX           = 17
+
 VIDEO_FOURCC = cv2.VideoWriter_fourcc(*'mp4v')
 
 VIDEO_TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M:%S"
@@ -296,6 +305,24 @@ with torch.no_grad():
     activity_features = clip_model.encode_text(activity_tokens)
     activity_features /= activity_features.norm(dim=-1, keepdim=True)
 
+print("Load face identifier...")
+face_identifier = None
+if FACE_ID_ENABLED:
+    try:
+        from inference.face_identity import FaceIdentifier
+        face_identifier = FaceIdentifier(
+            store_path=FACE_ID_STORE_PATH,
+            min_score=FACE_MIN_SCORE,
+            min_margin=FACE_MIN_MARGIN,
+            min_face_px=FACE_MIN_FACE_PX,
+            device=device,
+        )
+        print("Load face identifier... OK")
+    except Exception as e:
+        print(f"[WARN] Face identifier gagal dimuat, identifikasi karyawan dinonaktifkan: {e}")
+else:
+    print("Load face identifier... dilewati (FACE_ID_ENABLED=False)")
+
 zone = Polygon(ZONE_POLYGON)
 
 
@@ -361,6 +388,11 @@ class InferenceSession:
         self.person_last_seen_frame = {}
         self.next_person_id = 1
 
+        # state per person_id (hasil face identification, Fase 3)
+        self.person_employee = {}          # person_id -> {"employee_id","employee_name","score"} | "UNKNOWN"
+        self.person_face_attempts = {}     # person_id -> int
+        self.person_last_face_try = {}     # person_id -> frame_count
+
         self.max_concurrent_persons = 0
         self.frame_count = 0
         self.results_log = []
@@ -376,7 +408,10 @@ class InferenceSession:
                     continue
                 sim = cosine_sim(embedding, self.person_last_embedding[pid])
                 dist = euclidean_dist(position, self.person_last_position[pid])
-                if sim >= REID_MIN_COSINE_SCORE and dist <= REID_MAX_DISTANCE_PX and sim > best_sim:
+                passed = sim >= REID_MIN_COSINE_SCORE and dist <= REID_MAX_DISTANCE_PX
+                print(f"[ReID-DEBUG] frame {frame_count}: track_id {tid} vs person_id {pid} "
+                      f"-> sim={sim:.3f} dist={dist:.1f}px {'LOLOS' if passed else 'gagal'}")
+                if passed and sim > best_sim:
                     best_sim, best_pid = sim, pid
 
             if best_pid is not None:
@@ -387,6 +422,52 @@ class InferenceSession:
         pid = self.next_person_id
         self.next_person_id += 1
         return pid
+
+    def _resolve_employee_id(self, person_id, crop, frame_count):
+        """Coba identifikasi wajah untuk person_id ini, dengan retry ter-throttle
+        dan lock permanen begitu berhasil/menyerah (plan §D5, §6.5). Return dict
+        {"employee_id","employee_name","score"} kalau match, None kalau belum/
+        tidak berhasil -- TIDAK PERNAH melempar exception ke process_frame()."""
+        if face_identifier is None:
+            return None
+
+        cached = self.person_employee.get(person_id)
+        if cached is not None:
+            return cached if cached != "UNKNOWN" else None
+
+        attempts = self.person_face_attempts.get(person_id, 0)
+        if attempts >= FACE_ID_MAX_ATTEMPTS:
+            self.person_employee[person_id] = "UNKNOWN"
+            return None
+
+        last_try = self.person_last_face_try.get(person_id, -FACE_ID_RETRY_EVERY_FRAMES)
+        if frame_count - last_try < FACE_ID_RETRY_EVERY_FRAMES:
+            return None
+
+        self.person_last_face_try[person_id] = frame_count
+        self.person_face_attempts[person_id] = attempts + 1
+
+        try:
+            match = face_identifier.identify(crop)
+        except Exception as e:
+            print(f"[FaceID] identify() error untuk person_id {person_id}: {e}")
+            match = None
+
+        if match is None:
+            if self.person_face_attempts[person_id] >= FACE_ID_MAX_ATTEMPTS:
+                self.person_employee[person_id] = "UNKNOWN"
+                print(f"[FaceID] person_id {person_id}: jatah percobaan habis, ditandai UNKNOWN")
+            return None
+
+        result = {
+            "employee_id": match.employee_id,
+            "employee_name": match.employee_name,
+            "score": match.score,
+        }
+        self.person_employee[person_id] = result
+        print(f"[FaceID] person_id {person_id} dikenali sebagai {match.employee_name} "
+              f"(score={match.score:.3f}, margin={match.margin:.3f})")
+        return result
 
     def process_frame(self, frame_path: str):
         """Proses SATU frame baru. Dipanggil tiap kali stream_capture.py
@@ -402,7 +483,8 @@ class InferenceSession:
                 self.csv_file,
                 fieldnames=["frame", "frame_file", "track_id", "person_id", "in_zone",
                             "raw_activity", "smoothed_activity", "is_confirmed_violation",
-                            "violation_timestamp", "frame_timestamp"]
+                            "violation_timestamp", "frame_timestamp",
+                            "employee_id", "employee_name", "employee_score"]
             )
             self.writer.writeheader()
 
@@ -431,7 +513,7 @@ class InferenceSession:
                 del self.track_last_seen[tid]
                 pid = self.tid_to_person.pop(tid, None)
                 if pid is not None:
-                    self.person_active_tid.pop(tid, None)
+                    self.person_active_tid.pop(pid, None)
                 for state in [self.activity_history, self.violation_counter, self.last_smoothed,
                               self.last_confirmed, self.violation_timestamp]:
                     state.pop(tid, None)
@@ -448,7 +530,9 @@ class InferenceSession:
                     self.video_trackers[pid].finalize()
                     del self.video_trackers[pid]
                 for state in [self.person_last_embedding, self.person_last_position,
-                              self.person_last_seen_frame, self.person_clip_count]:
+                              self.person_last_seen_frame, self.person_clip_count,
+                              self.person_employee, self.person_face_attempts,
+                              self.person_last_face_try]:
                     state.pop(pid, None)
 
         if self.frame_size is None:
@@ -482,6 +566,7 @@ class InferenceSession:
         frame_has_violation = False
         confirmed_tids_this_frame = set()
         in_zone_tids_this_frame = set()
+        newly_matched_this_frame = []   # [(person_id, employee_id, score), ...] -- untuk resolusi konflik §6.7
 
         for ci, bbox in enumerate(current_boxes):
             x1, y1, x2, y2 = bbox
@@ -503,17 +588,24 @@ class InferenceSession:
                             (x1, y1 - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 128, 128), 1)
 
+                pid_out = self.tid_to_person.get(tid, "-")
+                cached_employee = self.person_employee.get(pid_out) if isinstance(pid_out, int) else None
+                cached_employee = cached_employee if isinstance(cached_employee, dict) else None
+
                 self.writer.writerow({
                     "frame"                 : frame_count,
                     "frame_file"            : frame_filename,
                     "track_id"              : tid,
-                    "person_id": self.tid_to_person.get(tid, "-"),
+                    "person_id": pid_out,
                     "in_zone"               : False,
                     "raw_activity"          : "-",
                     "smoothed_activity"     : "-",
                     "is_confirmed_violation": False,
                     "violation_timestamp"   : "-",
                     "frame_timestamp": current_frame_timestamp,
+                    "employee_id": cached_employee["employee_id"] if cached_employee else "-",
+                    "employee_name": cached_employee["employee_name"] if cached_employee else "-",
+                    "employee_score": f"{cached_employee['score']:.3f}" if cached_employee else "-",
                 })
                 continue
 
@@ -555,6 +647,12 @@ class InferenceSession:
             self.person_last_position[person_id] = (foot_x, foot_y)
             self.person_last_seen_frame[person_id] = frame_count
 
+            # ── FACE IDENTIFICATION (Fase 3) ──
+            was_cached = person_id in self.person_employee
+            employee = self._resolve_employee_id(person_id, crop, frame_count)
+            if employee is not None and not was_cached:
+                newly_matched_this_frame.append((person_id, employee["employee_id"], employee["score"]))
+
             # ── MAJORITY VOTING ──
             self.activity_history[tid].append(raw_label)
             smoothed_label = Counter(self.activity_history[tid]).most_common(1)[0][0]
@@ -584,9 +682,11 @@ class InferenceSession:
             box_color   = (0, 0, 255) if is_confirmed else (0, 255, 0)
             status_text = "VIOLATION" if is_confirmed else "COMPLIANT"
 
+            id_text = employee["employee_name"] if employee is not None else f"ID:{tid}"
+
             cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, 2)
             cv2.circle(frame, (foot_x, foot_y), 5, box_color, -1)
-            cv2.putText(frame, f"ID:{tid}",
+            cv2.putText(frame, id_text,
                         (x1, y1 - 50),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 1)
             draw_label(frame, clean_label, status_text, x1, y1, x2, y2, box_color)
@@ -603,12 +703,32 @@ class InferenceSession:
                 "is_confirmed_violation": is_confirmed,
                 "violation_timestamp"   : self.violation_timestamp[tid] or "-",
                 "frame_timestamp": current_frame_timestamp,
+                "employee_id": employee["employee_id"] if employee else "-",
+                "employee_name": employee["employee_name"] if employee else "-",
+                "employee_score": f"{employee['score']:.3f}" if employee else "-",
             }
             self.results_log.append(log_entry)
             self.writer.writerow(log_entry)
 
             if is_confirmed:
                 frame_has_violation = True
+
+        # ── RESOLUSI KONFLIK IDENTITAS (Fase 3, plan §6.7) ──
+        # Kalau >1 person_id berbeda baru match ke employee_id yang SAMA di frame
+        # ini, pertahankan yang skornya tertinggi, lepas kunci yang lain supaya
+        # bisa dicoba ulang di frame berikutnya (bukan dikunci UNKNOWN permanen).
+        by_employee: dict[str, list[tuple[int, float]]] = {}
+        for pid, employee_id, score in newly_matched_this_frame:
+            by_employee.setdefault(employee_id, []).append((pid, score))
+
+        for employee_id, matches in by_employee.items():
+            if len(matches) <= 1:
+                continue
+            matches.sort(key=lambda m: m[1], reverse=True)
+            for pid, score in matches[1:]:
+                print(f"[FaceID] Konflik: person_id {pid} juga match ke {employee_id} "
+                      f"(score={score:.3f}), skor person_id lain lebih tinggi -- kunci dilepas")
+                self.person_employee.pop(pid, None)
 
         self.max_concurrent_persons = max(self.max_concurrent_persons, len(in_zone_tids_this_frame))
 
@@ -677,10 +797,19 @@ class InferenceSession:
                 "Total_detections": 0,
                 "Max_concurrent_persons": 0,
                 "Output_dir": self.output_dir,
+                "Identified_employees": [],
+                "Unidentified_persons": 0,
+                "Identification_rate": 0.0,
             }
 
         in_zone_logs = [r for r in self.results_log if r["in_zone"]]
         violations   = [r for r in self.results_log if r["is_confirmed_violation"]]
+
+        matched_person_ids = [pid for pid, v in self.person_employee.items() if isinstance(v, dict)]
+        unknown_person_ids = [pid for pid, v in self.person_employee.items() if v == "UNKNOWN"]
+        identified_employees = sorted({self.person_employee[pid]["employee_name"] for pid in matched_person_ids})
+        total_resolved = len(matched_person_ids) + len(unknown_person_ids)
+        identification_rate = (len(matched_person_ids) / total_resolved * 100) if total_resolved else 0.0
 
         print("\n" + "=" * 50)
         print("DONE")
@@ -695,6 +824,12 @@ class InferenceSession:
         print(f"\nTotal track_id unik (mentah, sebelum re-id) : {len(unique_tids)} -> {unique_tids}")
         print(f"Total person_id unik (setelah re-id)         : {len(unique_persons)} -> {unique_persons}")
         print(f"Max orang in-zone SEKALIGUS di 1 frame (independen re-id): {self.max_concurrent_persons}")
+
+        print(f"\nIdentifikasi karyawan (Fase 3):")
+        print(f"  Karyawan teridentifikasi (unik) : {len(identified_employees)} -> {identified_employees}")
+        print(f"  Person_id tidak teridentifikasi : {len(unknown_person_ids)}")
+        print(f"  Identification rate             : {identification_rate:.1f}% "
+              f"({len(matched_person_ids)}/{total_resolved} person_id)")
 
         print("\nBreakdown aktivitas IN_ZONE (smoothed):")
         activity_counts = Counter(r["smoothed_activity"] for r in in_zone_logs)
@@ -720,6 +855,9 @@ class InferenceSession:
             "Total_detections": len(self.results_log),
             "Max_concurrent_persons": self.max_concurrent_persons,
             "Output_dir": self.output_dir,
+            "Identified_employees": identified_employees,
+            "Unidentified_persons": len(unknown_person_ids),
+            "Identification_rate": round(identification_rate, 1),
         }
 
 

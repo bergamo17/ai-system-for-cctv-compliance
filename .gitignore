@@ -21,3 +21,10 @@ videos/
 .env
 *.env
 .env.*
+
+# AI Plan
+docs/
+
+# Employees
+employees/
+weights/

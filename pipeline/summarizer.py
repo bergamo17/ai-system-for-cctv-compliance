@@ -137,9 +137,12 @@ system_prompt = (
         "(contoh yang DILARANG: 'Karyawan A', 'Karyawan 1'). Cukup gunakan kata "
         "'karyawan' secara umum, atau frasa seperti 'salah satu karyawan'. Jangan "
         "berasumsi jumlah karyawan berdasarkan banyaknya ID unik di data mentah.\n\n"
-        "PENTING SOAL JAM KEJADIAN: setiap kali menyebutkan pelanggaran spesifik, WAJIB "
-        "cantumkan jam kejadiannya jika tersedia (kolom violation_timestamp), contoh: "
-        "'sekitar pukul 14:49'. Jika kosong/tidak terbaca ('-'), JANGAN mengarang jam.\n\n"
+        "PENTING SOAL JAM KEJADIAN DAN NAMA: setiap kali menyebutkan pelanggaran spesifik, WAJIB "
+        "cantumkan jam kejadiannya jika tersedia (kolom violation_timestamp), DAN cantumkan nama "
+        "karyawan kalau data menyediakannya. Contoh lengkap: 'Ariel tercatat menggunakan HP "
+        "sekitar pukul 14:49'. Contoh tanpa nama: 'Seorang karyawan tercatat menggunakan HP sekitar pukul 14:49'." 
+        "Jika jam kosong/tidak terbaca ('-'), JANGAN mengarang jam. Jika nama tidak tersedia, "
+        "JANGAN mengarang nama — pakai 'seorang karyawan'."
         "PENTING SOAL SKOR TIDAK TERSEDIA: Jika Overall Operations Score diberikan "
         "sebagai 'TIDAK TERSEDIA' atau mungkin 'NONE', berarti tidak ada aktivitas sama sekali "
         "atau orang yang terdeteksi pada sesi tersebut. Dalam kasus ini, tulis baris skor "
@@ -185,27 +188,51 @@ system_prompt = (
 
 
 def compress_log(rows):
-    pre_track = defaultdict(lambda: {
+    """Agregasi per identitas: pakai employee_id (hasil face recognition) kalau
+    ada, fallback ke person_id (hasil CLIP re-id), fallback ke track_id mentah
+    kalau keduanya tidak ada (CSV lama, backward compatible dengan plan §7).
+
+    Efek samping: mengagregasi lewat employee_id juga menyatukan person_id/
+    track_id berbeda yang ternyata orang yang sama (dikenali via wajah),
+    memperbaiki double-count yang bisa terjadi kalau track sempat terpecah.
+    """
+    pre_person = defaultdict(lambda: {
         "frames_in_zone": 0,
         "activities": defaultdict(int),
         "violation_frames": 0,
         "first_frame": None,
         "last_frame": None,
         "violation_timestamp": None,
+        "employee_name": None,
+        "track_id": None,
     })
-    
+
     for r in rows:
         if r["in_zone"] != "True":
             continue
 
-        tid = r["track_id"]
-        info = pre_track[tid]
+        employee_id = r.get("employee_id", "-")
+        person_id = r.get("person_id", "-")
+        track_id = r["track_id"]
+
+        if employee_id and employee_id != "-":
+            key = f"employee:{employee_id}"
+        elif person_id and person_id != "-":
+            key = f"person:{person_id}"
+        else:
+            key = f"track:{track_id}"
+
+        info = pre_person[key]
         info["frames_in_zone"] += 1
         info["activities"][r["smoothed_activity"]] += 1
+        info["track_id"] = track_id
+        if employee_id and employee_id != "-":
+            info["employee_name"] = r.get("employee_name", "-")
+
         if r["is_confirmed_violation"] == "True":
             info["violation_frames"] += 1
 
-            # Simpan jam kejadian pertama kali track ini terkonfirmasi violation.
+            # Simpan jam kejadian pertama kali orang ini terkonfirmasi violation.
             # violation_timestamp konsisten sepanjang durasi violation track yang sama
             # (hanya di-update saat transisi COMPLIANT -> VIOLATION di inference.py),
             # jadi cukup ambil nilai pertama yang bukan "-".
@@ -219,11 +246,11 @@ def compress_log(rows):
         info["last_frame"] = frame_no
 
     summary_lines = []
-    for tid, info in pre_track.items():
+    for key, info in pre_person.items():
         dominant_activity = max(info["activities"], key=info["activities"].get)
-        ts_text = info["violation_timestamp"] or "-"
+        label = info["employee_name"] if info["employee_name"] else f"Track {info['track_id']}"
         summary_lines.append(
-            f"- Track {tid}: terlihat dari frame {info['first_frame']} sampai "
+            f"- {label}: terlihat dari frame {info['first_frame']} sampai "
             f"{info['last_frame']} ({info['frames_in_zone']} frame di dalam zona). "
             f"Aktivitas dominan: '{dominant_activity}'. "
             f"Jumlah frame terindikasi pelanggaran: {info['violation_frames']}. "
@@ -290,7 +317,7 @@ def call_llm_summary(
     user_prompt = (
         f"Video: {video_name or '(tidak diketahui)'}\n\n"
         f"Statistik keseluruhan:\n{stats_text}\n\n"
-        f"Log aktivitas (per track_id):\n{compressed_text}\n\n"
+        f"Log aktivitas (per orang; nama karyawan ditampilkan kalau teridentifikasi):\n{compressed_text}\n\n"
         "Tolong buat ringkasan pelanggaran pegawai untuk rentang waktu video ini "
         "sesuai instruksi yang sudah diberikan."
     )

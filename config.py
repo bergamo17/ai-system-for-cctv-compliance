@@ -44,6 +44,8 @@ ACTIVITIES = [
     'a person eating food',
     # 'a person lying down sleeping',
     'a person using laptop or computer',
+    'a person standing in the room',
+    'a person walking in the room',
 ]
 
 # VIOLATIONS harus selalu subset dari ACTIVITIES
@@ -68,6 +70,8 @@ IDLE_ACTIVITIES = [
     'a person sitting idle doing nothing',
     'a person using a phone',
     'a person eating food',
+    'a person standing in the room',
+    'a person walking in the room',
     # 'a person lying down sleeping',
 ]
 
