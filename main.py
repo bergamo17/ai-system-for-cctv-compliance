@@ -1,111 +1,81 @@
 import os
-import shutil
+import sqlite3
 import uvicorn
-from datetime import datetime, date
+from datetime import datetime
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, Query, Request
+from fastapi import FastAPI, File, Query, Request, HTTPException
 from fastapi.responses import JSONResponse, FileResponse
-from pipeline.watcher import start_watcher
-from config import INPUT_FOLDER, FRAME_FOLDER, FRAME_INTERVAL, SUMMARY_OUTPUT_DIR, OUTPUT_FOLDER
+from config import (
+    DB_PATH, SUMMARY_OUTPUT_DIR
+)
+from pipeline.db import (
+    get_summary_by_id,
+    get_list_of_summaries,
+    get_pdf_path,
+    get_latest_status
+)
+
+os.makedirs(SUMMARY_OUTPUT_DIR, exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    os.makedirs(INPUT_FOLDER, exist_ok=True)
-    os.makedirs(FRAME_FOLDER, exist_ok=True)
-    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-    os.makedirs(SUMMARY_OUTPUT_DIR, exist_ok=True)
-    observer = start_watcher()
-    print(f"Server ready. Watchdog is active monitors input folder")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("SELECT 1 FROM summaries LIMIT 1")
+        conn.close()
+    except sqlite3.OperationalError as e:
+        raise RuntimeError(
+            f"Cannot read the 'summaries' table from {DB_PATH}. "
+            f"Already run the migration? {e}"
+        )
 
     yield
 
-    observer.stop()
-    observer.join()
-    print(f"Server stopped")
-
 app = FastAPI(lifespan=lifespan)
 
-@app.post("/upload")
-async def upload_video(file: UploadFile = File(...)):
-    SUPPORTED_FORMATS = (".mp4", ".avi", ".mov")
-    if not file.filename.endswith(SUPPORTED_FORMATS):
-        return JSONResponse(
-            status_code=400,
-            content={"status": "error", "message": "File format not supported"}
-        )
-    
-    destination = os.path.join(INPUT_FOLDER, file.filename)
-    with open(destination, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    print(f"Video received: {file.filename}")
-
-    return JSONResponse(
-        status_code=200,
-        content={
-            "status": "success",
-            "message": f"Video {file.filename} successfully uploaded and is being processed",
-            "file": file.filename
-        }
-    )
-
 @app.get("/summaries")
-async def list_summaries(request: Request, date_filter: str = Query(None, description="Format: YYYY-MM-DD")):
-    files = sorted(os.listdir(SUMMARY_OUTPUT_DIR), reverse=True)
-    
+async def get_list_summaries(
+    date_filter: str | None = Query(None, description="Format: YYYY-MM-DD"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
     if date_filter:
         try:
-            target_date = datetime.strptime(date_filter, "%Y-%m-%d").date()
+            datetime.strftime(date_filter, "%Y-%m-%d")
         except ValueError:
-            return JSONResponse(
+            raise HTTPException(
                 status_code=400,
-                content={"error": "format tanggal salah, gunakan YYYY-MM-DD"}
+                detail="Invalid date format, use YYYY-MM-DD"
             )
-        
-        filtered = []
-        for f in files:
-            try:
-                timestamp_str = f.replace("summary-", "").replace(".pdf", "")
-                file_date = datetime.strptime(timestamp_str, "%Y%m%d_%H%M%S").date()
-                if file_date == target_date:
-                    filtered.append(f)
-            except ValueError:
-                continue
 
-        files = filtered
+        summaries = get_list_of_summaries(date_filter, limit, offset)
+        return {"date": date_filter, "count": len(summaries), "summaries": summaries}
 
-    base_url = str(request.base_url)
-    result = [
-        {
-            "filename": f, 
-            "download_url": f"{base_url}summaries/{f}"
-        }
-        for f in files
-    ]
-    
-    return {"date": date_filter, "summaries": result}
+@app.get("/summaries/{summary_id}")
+async def get_summaries(summary_id: int):
+    summary = get_summaries(summary_id=summary_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Summary not found")
+    return summary
 
-@app.get("/summaries/{filename}")
-async def download_summary(filename: str):
-    filepath = os.path.join(SUMMARY_OUTPUT_DIR, filename)
-    if not os.path.exists(filepath):
-        return JSONResponse(status_code=400, content={"error": "file yang dimaksud tidak ditemukan"})
-    return FileResponse(filepath, media_type="application/pdf", filename=filename)
+@app.get("/summaries/{summary_id}/pdf")
+async def get_summaries_file(summary_id: int):
+    summary_file = get_pdf_path(summary_id=summary_id)
+    if summary_file is None:
+        raise HTTPException(status_code=404, detail="Summary file not found")
+    return FileResponse(
+        summary_file,
+        media_type="application/pdf",
+        filename=summary_file.split("/")[-1],
+    )
 
 
 @app.get("/status")
 async def status():
-    frames = [f for f in os.listdir(FRAME_FOLDER) if f.endswith(".jpg")]
-    videos = [f for f in os.listdir(INPUT_FOLDER)]
-
-    return JSONResponse(
-        status_code=200,
-        content={
-            "status": "running",
-            "videos_in_queue": len(videos),
-            "frames_generated": len(frames)
-        }
-    )
+    latest = get_latest_status()
+    if latest is None:
+        return {"status": "no_data", "latest_session": None}
+    return {"status": "ok", "latest_session": latest}
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=False)
