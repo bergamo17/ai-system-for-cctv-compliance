@@ -16,10 +16,6 @@ from config import (FRAME_INTERVAL, FRAME_PER_SECOND, PRE_VIOLATION_DURATION,
     POST_VIOLATION_DURATION, ACTIVITIES, ACTIVE_ACTIVITIES, VIOLATIONS, IDLE_ACTIVITIES)
 
 
-# ─────────────────────────────────────────────
-#  CONFIGURATION (identik dengan inference.py)
-# ─────────────────────────────────────────────
-
 INPUT_PATH           = "frames"
 OUTPUT_PATH          = "output"
 
@@ -37,11 +33,11 @@ REID_MAX_GAP_FRAMES = 90
 REID_MIN_COSINE_SCORE = 0.9
 REID_MAX_DISTANCE_PX = 150
 
-# ── Face identification (Fase 3, docs/face-recognition-plan.md) ──
+# ── Face identification ──
 FACE_ID_ENABLED            = True   # master switch, default OFF
 FACE_ID_STORE_PATH         = "weights/faces/employees.npz"
-FACE_ID_RETRY_EVERY_FRAMES = 15      # jangan coba tiap frame
-FACE_ID_MAX_ATTEMPTS       = 8       # setelah ini, person_id ditandai UNKNOWN permanen
+FACE_ID_RETRY_EVERY_FRAMES = 15      
+FACE_ID_MAX_ATTEMPTS       = 8       
 FACE_MIN_SCORE             = 0.30
 FACE_MIN_MARGIN            = 0.10
 FACE_MIN_FACE_PX           = 17
@@ -53,8 +49,6 @@ VIDEO_TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M:%S"
 
 # ─────────────────────────────────────────────
 #  HELPER: FRAME TIMESTAMP
-#  base_dt sekarang datang dari trigger saat sesi inference dijalankan
-#  (lihat InferenceSession.__init__), bukan lagi hasil OCR overlay CCTV.
 # ─────────────────────────────────────────────
 
 def compute_frame_timestamp(base_dt, frame_count, fps):
@@ -63,13 +57,6 @@ def compute_frame_timestamp(base_dt, frame_count, fps):
     elapsed_seconds = (frame_count - 1) / fps
     ts = base_dt + timedelta(seconds=elapsed_seconds)
     return ts.strftime(VIDEO_TIMESTAMP_FORMAT)
-
-# ZONE_POLYGON = [
-#     (462, 1079),
-#     (0, 243),
-#     (168, 2),
-#     (792, 265)
-# ]
 
 ZONE_POLYGON_PATH = "zone_polygon.json"
 
@@ -86,7 +73,7 @@ else:
     ]
 
 # ─────────────────────────────────────────────
-#  HELPER: DRAW LABEL (identik dengan inference.py)
+#  HELPER: DRAW LABEL
 # ─────────────────────────────────────────────
 
 def draw_label(frame, text1, text2, x1, y1, x2, y2, color):
@@ -109,7 +96,7 @@ def draw_label(frame, text1, text2, x1, y1, x2, y2, color):
 
 
 # ─────────────────────────────────────────────
-#  HELPER: Re-ID (identik dengan inference.py)
+#  HELPER: Re-ID
 # ─────────────────────────────────────────────
 
 def cosine_sim(emb_a, emb_b):
@@ -120,7 +107,7 @@ def euclidean_dist(pos_a, pos_b):
 
 
 # ─────────────────────────────────────────────
-#  VIOLATION VIDEO TRACKER (identik dengan inference.py)
+#  VIOLATION VIDEO TRACKER
 # ─────────────────────────────────────────────
 
 class ViolationVideoTracker:
@@ -197,7 +184,7 @@ class ViolationVideoTracker:
 
 
 # ─────────────────────────────────────────────
-#  LOAD MODELS — dilakukan sekali saat import (identik dengan inference.py)
+#  LOAD MODELS
 # ─────────────────────────────────────────────
 
 print("Load YOLO model...")
@@ -240,19 +227,7 @@ zone = Polygon(ZONE_POLYGON)
 
 
 # ─────────────────────────────────────────────
-#  INFERENCE SESSION — versi streaming dari run_inference()
-#
-#  3 fase yang dulu digabung dalam 1 fungsi (init di awal, loop
-#  per-frame, finalize di akhir) sekarang jadi 3 entry point terpisah
-#  yang bisa dipanggil independen di waktu berbeda:
-#
-#    session = InferenceSession(output_dir)   # panggil 1x, di awal sesi
-#    session.process_frame(frame_path)        # panggil berkali-kali, tiap ada frame baru
-#    result = session.finalize()              # panggil 1x, setelah frame terakhir selesai
-#
-#  Semua state yang di run_inference() dulu berupa variabel lokal
-#  (track_last_seen, activity_history, dst) sekarang jadi atribut
-#  self.* supaya "diingat" antar pemanggilan process_frame().
+#  INFERENCE SESSION 
 # ─────────────────────────────────────────────
 
 class InferenceSession:
@@ -275,10 +250,6 @@ class InferenceSession:
         self.violation_log_path = os.path.join(output_dir, f"violation_log_{timestamp}.csv")
         self.annotated_video_path = os.path.join(self.annotated_video_dir, f"annotated_{timestamp}.mp4")
 
-        # csv_file/writer baru dibuka saat frame pertama BERHASIL dibaca
-        # (bukan di __init__), supaya perilakunya sama seperti run_inference()
-        # lama: kalau ternyata tidak ada frame sama sekali, tidak ada file
-        # violation_log_*.csv yang dibuat.
         self.csv_file = None
         self.writer = None
         self.full_video_writer = None
@@ -304,10 +275,10 @@ class InferenceSession:
         self.person_last_seen_frame = {}
         self.next_person_id = 1
 
-        # state per person_id (hasil face identification, Fase 3)
-        self.person_employee = {}          # person_id -> {"employee_id","employee_name","score"} | "UNKNOWN"
-        self.person_face_attempts = {}     # person_id -> int
-        self.person_last_face_try = {}     # person_id -> frame_count
+        # state per person_id (hasil face identification)
+        self.person_employee = {}          
+        self.person_face_attempts = {}     
+        self.person_last_face_try = {}     
 
         self.max_concurrent_persons = 0
         self.frame_count = 0

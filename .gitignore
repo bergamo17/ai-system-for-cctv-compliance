@@ -32,3 +32,20 @@ weights/
 # DB
 pipeline/db/*.db
 Popcorn
+
+# frames
+frames/
+sample/
+
+# Thrash file
+inference/blip_inference.py
+inference/inference_client.py
+inference/inference.py
+pipeline/chopper.py
+pipeline/frame_violation.py
+pipeline/watcher.py
+recorder/record.py
+recorder/recorder_core.py
+built_digits_template.py
+debug_timestamp.py
+.DS_Store
