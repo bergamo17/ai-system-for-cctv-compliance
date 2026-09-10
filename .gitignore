@@ -34,7 +34,7 @@ pipeline/db/*.db
 Popcorn
 
 # frames
-frames/
+frames/*
 sample/
 
 # Thrash file
@@ -48,4 +48,4 @@ recorder/record.py
 recorder/recorder_core.py
 built_digits_template.py
 debug_timestamp.py
-.DS_Store
+*.DS_Store
