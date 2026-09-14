@@ -2,6 +2,7 @@ import os
 import csv
 import glob
 import cv2
+import time
 import torch
 import json
 import open_clip
@@ -38,7 +39,7 @@ FACE_ID_ENABLED            = True   # master switch, default OFF
 FACE_ID_STORE_PATH         = "weights/faces/employees.npz"
 FACE_ID_RETRY_EVERY_FRAMES = 15      
 FACE_ID_MAX_ATTEMPTS       = 8       
-FACE_MIN_SCORE             = 0.30
+FACE_MIN_SCORE             = 0.18
 FACE_MIN_MARGIN            = 0.10
 FACE_MIN_FACE_PX           = 17
 
@@ -419,12 +420,13 @@ class InferenceSession:
             # print(f"[Inference] Full annotated video -> {self.annotated_video_path}")
 
         # ── Jalankan YOLO ──
+        t_start = time.perf_counter()
         yolo_results = yolo_model.track(frame, conf=0.35, persist=True, tracker="bytetrack.yaml", verbose=False)
+        t_yolo_done = time.perf_counter()
         boxes = yolo_results[0].boxes
 
         if boxes.id is None:
-            # if self.full_video_writer is not None:
-            #     self.full_video_writer.write(frame)
+            print(f"[Log] frame {frame_count}: yolo+bytetrack={(t_yolo_done - t_start)*1000:.1f}ms")
 
             if frame_count % 30 == 0:
                 print(f"[Inference] Progress: {frame_count} frame diproses")
@@ -632,6 +634,11 @@ class InferenceSession:
         # flush supaya baris CSV langsung terlihat di disk begitu ditulis,
         # tanpa menunggu file ditutup di finalize()
         self.csv_file.flush()
+
+        t_end = time.perf_counter()
+        print(f"[Log] frame {frame_count}: yolo + bytetrack={(t_yolo_done - t_start)*1000:.1f}ms, "
+              f"total time={(t_end - t_start)*1000:.1f}ms",
+              f"rows ditulis={len(current_boxes)}")
 
         return {"frame_count": frame_count, "violation_detected": frame_has_violation}
 
